@@ -1,10 +1,10 @@
 # Worker Agent Workflow — Git Repos, Local Directories & Memory Strategy
 
-> Created by SpongeBob — 2026-04-27
+> Created by SpongeBob — 2026-04-27 | Generalized for all worker agents
 
 ## Overview
 
-Each worker agent (SpongeBob, PatrickStar, MrKrab, Squidward) runs as a pod in OpenAB-EKS. Pods are **ephemeral** — they can be rotated, restarted, or rescheduled at any time. All persistent state lives in **three Git repositories**. The agent's local filesystem is a transient working copy that gets rebuilt from Git on every session start.
+Each worker agent runs as a pod in OpenAB-EKS. Pods are **ephemeral** — they can be rotated, restarted, or rescheduled at any time. All persistent state lives in **three Git repositories**. The agent's local filesystem is a transient working copy that gets rebuilt from Git on every session start.
 
 ---
 
@@ -31,8 +31,8 @@ graph LR
 
 | Repository | Branch Strategy | Purpose | Survives Pod Restart? |
 |---|---|---|---|
-| **agent-memory** | One branch per agent (e.g., `SpongeBob`) | Task summaries, decisions, learnings, TODO pool | ✅ Yes (in Git) |
-| **agent-workspaces** | One branch per task (e.g., `spongebob-20260427-feature-x`) | Code, configs, deliverables for active tasks | ✅ Yes (in Git) |
+| **agent-memory** | One branch per agent (e.g., `<AGENT-NAME>`) | Task summaries, decisions, learnings, TODO pool | ✅ Yes (in Git) |
+| **agent-workspaces** | One branch per task (e.g., `<agent-name>-20260427-feature-x`) | Code, configs, deliverables for active tasks | ✅ Yes (in Git) |
 | **agent-outbound** | Shared `main` branch | Documents/materials for external/public sharing | ✅ Yes (in Git) |
 
 ---
@@ -43,15 +43,15 @@ graph LR
 graph TB
     subgraph POD["Agent Pod — Ephemeral Container"]
         subgraph LOCAL["/home/agent/"]
-            LM["/agent-memory<br/><i>Branch: SpongeBob</i><br/>Local working copy"]
+            LM["/agent-memory<br/><i>Branch: &lt;AGENT-NAME&gt;</i><br/>Local working copy"]
             LW["/agent-workspaces<br/><i>Branch: per-task</i><br/>Local working copy"]
             LO["/agent-outbound<br/><i>Branch: main</i><br/>Local working copy"]
         end
     end
 
     subgraph GIT["GitHub (Persistent)"]
-        GM["agent-memory<br/>branch: SpongeBob"]
-        GW["agent-workspaces<br/>branch: spongebob-*"]
+        GM["agent-memory<br/>branch: &lt;AGENT-NAME&gt;"]
+        GW["agent-workspaces<br/>branch: &lt;agent-name&gt;-*"]
         GO["agent-outbound<br/>branch: main"]
     end
 
@@ -98,7 +98,7 @@ flowchart TD
 # 1. Memory
 cd /home/agent
 gh repo clone juntinyeh-worker/agent-memory
-cd agent-memory && git checkout SpongeBob && git pull origin SpongeBob
+cd agent-memory && git checkout <AGENT-NAME> && git pull origin <AGENT-NAME>
 
 # 2. Workspaces
 cd /home/agent
@@ -311,7 +311,7 @@ flowchart TD
 graph TD
     HUMAN["👤 Human / Admin"] -->|"direct command"| TODO["Agent's TODO.md"]
     ADMIN["🔧 UncleBob<br/>(AdminAgent)"] -->|"task dispatch"| TODO
-    SELF["🧽 Self-generated<br/>(during work)"] -->|"discovered sub-task"| TODO
+    SELF["🤖 Self-generated<br/>(during work)"] -->|"discovered sub-task"| TODO
 
     OTHER["Other Workers"] -.x|"❌ Not accepted"| TODO
 
@@ -333,7 +333,7 @@ flowchart TD
     READ_TODO --> PICK["Pick highest-priority oldest task"]
     PICK --> MARK_IP["Mark task [~] In Progress"]
 
-    MARK_IP --> CREATE_BRANCH["Create workspace branch<br/><code>spongebob-YYYYMMDD-description</code>"]
+    MARK_IP --> CREATE_BRANCH["Create workspace branch<br/><code>&lt;agent-name&gt;-YYYYMMDD-description</code>"]
     CREATE_BRANCH --> SEARCH_MEM["Search memory for context<br/>(hot → warm → cold → git log)"]
     SEARCH_MEM --> WORK["Do the work<br/>(code, configs, docs, etc.)"]
 
