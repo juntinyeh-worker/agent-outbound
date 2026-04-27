@@ -313,7 +313,7 @@ graph TD
     ADMIN["🔧 UncleBob<br/>(AdminAgent)"] -->|"task dispatch"| TODO
     SELF["🤖 Self-generated<br/>(during work)"] -->|"discovered sub-task"| TODO
 
-    OTHER["Other Workers"] -.x|"❌ Not accepted"| TODO
+    OTHER["Other Workers"] -.-x|"❌ Not accepted"| TODO
 
     style OTHER fill:#ffebee,stroke:#c62828
 ```
