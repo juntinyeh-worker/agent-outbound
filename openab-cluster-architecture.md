@@ -145,7 +145,7 @@ graph TD
 
     UB -->|"task dispatch /<br/>admin commands"| WORKERS
 
-    WORKERS -.x|"❌ blocked"| WORKERS
+    WORKERS -.->|"❌ blocked"| WORKERS
 
     style WORKERS fill:#e8f5e9,stroke:#388e3c
     style UB fill:#fff3e0,stroke:#f57c00
