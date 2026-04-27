@@ -384,6 +384,7 @@ graph TB
     end
 
     HUMAN -->|"commands"| BRAIN
+    HUMAN -->|"commands"| ADMIN
     ADMIN -->|"task dispatch"| BRAIN
 
     BRAIN <-->|"read/write"| LOCAL_MEM
