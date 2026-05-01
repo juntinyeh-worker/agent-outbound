@@ -1,0 +1,6 @@
+bedrock-agentcore
+nova-act
+playwright
+boto3
+rich
+python-dotenv
