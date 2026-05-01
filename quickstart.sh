@@ -6,6 +6,8 @@
 #   vim .env          # fill in your values
 #   ./quickstart.sh
 #
+# Auth: KIRO_API_KEY is injected as env var — no manual login needed.
+#
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
@@ -45,7 +47,7 @@ echo "    Nodes:   ${NODE_COUNT}× ${NODE_TYPE}"
 echo ""
 
 # ── Step 1: EKS Cluster ───────────────────────────────────
-echo "==> [1/6] EKS cluster"
+echo "==> [1/5] EKS cluster"
 if aws eks describe-cluster --name "$CLUSTER_NAME" --region "$AWS_REGION" &>/dev/null; then
   echo "    Cluster exists, skipping creation."
 else
@@ -61,7 +63,7 @@ aws eks update-kubeconfig --name "$CLUSTER_NAME" --region "$AWS_REGION"
 echo "    ✓ kubeconfig updated"
 
 # ── Step 2: EBS CSI Driver ─────────────────────────────────
-echo "==> [2/6] EBS CSI driver (for PVC persistence)"
+echo "==> [2/5] EBS CSI driver (for PVC persistence)"
 ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
 
 eksctl utils associate-iam-oidc-provider \
@@ -83,7 +85,7 @@ eksctl create addon --name aws-ebs-csi-driver \
 echo "    ✓ EBS CSI driver ready"
 
 # ── Step 3: Namespace + Secrets ────────────────────────────
-echo "==> [3/6] Namespace + secrets"
+echo "==> [3/5] Namespace + secrets"
 kubectl create namespace "$NS" 2>/dev/null || true
 
 kubectl create secret generic openab-shared-secrets \
@@ -94,7 +96,7 @@ kubectl create secret generic openab-shared-secrets \
 echo "    ✓ Secrets created"
 
 # ── Step 4: Helm deploy ───────────────────────────────────
-echo "==> [4/6] Helm deploy (6 agents)"
+echo "==> [4/5] Helm deploy (6 agents)"
 helm repo add openab https://openabdev.github.io/openab 2>/dev/null || true
 helm repo update openab
 
@@ -116,27 +118,12 @@ rm -f /tmp/_values-team.yaml
 echo "    ✓ Helm release deployed"
 
 # ── Step 5: Wait for pods ─────────────────────────────────
-echo "==> [5/6] Waiting for pods to be ready..."
+echo "==> [5/5] Waiting for pods to be ready..."
 kubectl wait --for=condition=ready pod \
   -l "app.kubernetes.io/instance=${RELEASE}" \
   -n "$NS" --timeout=300s
 echo "    ✓ All pods ready"
 kubectl get pods -n "$NS"
-
-# ── Step 6: Auth instructions ─────────────────────────────
-echo ""
-echo "==> [6/6] Agent authentication (manual step)"
-echo ""
-echo "    Each agent needs a one-time Kiro CLI login."
-echo "    Run each command below, follow the device-code flow in your browser:"
-echo ""
-for role in pm architect dev qa cloudops auditor; do
-  echo "    kubectl exec -it deployment/${RELEASE}-${role} -n $NS -- kiro-cli login --use-device-flow"
-done
-echo ""
-echo "    After ALL agents are authenticated, restart them:"
-echo ""
-echo "    kubectl rollout restart deployment -n $NS -l app.kubernetes.io/instance=$RELEASE"
 
 # ── Done ──────────────────────────────────────────────────
 echo ""

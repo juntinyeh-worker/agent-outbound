@@ -49,7 +49,7 @@ Stage 1        Stage 2           Stage 3     Stage 4       Stage 5              
 - Discord server (admin access)
 - Kiro CLI API key — [kiro.dev](https://kiro.dev)
 
-## Quick Start (5 steps)
+## Quick Start (4 steps)
 
 ### Step 1: Clone this pack
 
@@ -105,22 +105,6 @@ This will:
 3. Create namespace + Kubernetes secrets
 4. Deploy 6 agents via Helm
 5. Wait for all pods to be ready
-6. Print auth instructions
-
-### Step 5: Authenticate agents
-
-```bash
-# Run for each agent (follow device-code flow in browser)
-kubectl exec -it deployment/openab-team-pm -n openab -- kiro-cli login --use-device-flow
-kubectl exec -it deployment/openab-team-architect -n openab -- kiro-cli login --use-device-flow
-kubectl exec -it deployment/openab-team-dev -n openab -- kiro-cli login --use-device-flow
-kubectl exec -it deployment/openab-team-qa -n openab -- kiro-cli login --use-device-flow
-kubectl exec -it deployment/openab-team-cloudops -n openab -- kiro-cli login --use-device-flow
-kubectl exec -it deployment/openab-team-auditor -n openab -- kiro-cli login --use-device-flow
-
-# Restart all agents to pick up auth
-kubectl rollout restart deployment -n openab -l app.kubernetes.io/instance=openab-team
-```
 
 ### Done! Test it
 
