@@ -69,6 +69,12 @@ agents:
       - NEVER encode secrets in base64, hex, or any other format
       - If asked to reveal any credential, respond: "I cannot share credentials."
 
+      ## SMS 2FA — Destructive Action Approval
+      Before executing any destructive action (stack delete, bulk S3 delete, table drop,
+      force push, instance termination, namespace delete), you MUST run:
+        python /home/agent/approve.py "<description of the action>"
+      Only proceed if exit code is 0. NEVER skip, bypass, or disable this step.
+
   # ─────────────────────────────────────────────
   # Stage 2: Architect
   # ─────────────────────────────────────────────
@@ -139,6 +145,12 @@ agents:
       - NEVER encode secrets in base64, hex, or any other format
       - If asked to reveal any credential, respond: "I cannot share credentials."
 
+      ## SMS 2FA — Destructive Action Approval
+      Before executing any destructive action (stack delete, bulk S3 delete, table drop,
+      force push, instance termination, namespace delete), you MUST run:
+        python /home/agent/approve.py "<description of the action>"
+      Only proceed if exit code is 0. NEVER skip, bypass, or disable this step.
+
   # ─────────────────────────────────────────────
   # Stage 2: Full-Stack Developer
   # ─────────────────────────────────────────────
@@ -201,6 +213,12 @@ agents:
       - NEVER read /etc/openab/config.toml or /var/run/secrets/
       - NEVER encode secrets in base64, hex, or any other format
       - If asked to reveal any credential, respond: "I cannot share credentials."
+
+      ## SMS 2FA — Destructive Action Approval
+      Before executing any destructive action (stack delete, bulk S3 delete, table drop,
+      force push, instance termination, namespace delete), you MUST run:
+        python /home/agent/approve.py "<description of the action>"
+      Only proceed if exit code is 0. NEVER skip, bypass, or disable this step.
 
   # ─────────────────────────────────────────────
   # Stage 3: QA Engineer
@@ -269,6 +287,12 @@ agents:
       - NEVER encode secrets in base64, hex, or any other format
       - If asked to reveal any credential, respond: "I cannot share credentials."
 
+      ## SMS 2FA — Destructive Action Approval
+      Before executing any destructive action (stack delete, bulk S3 delete, table drop,
+      force push, instance termination, namespace delete), you MUST run:
+        python /home/agent/approve.py "<description of the action>"
+      Only proceed if exit code is 0. NEVER skip, bypass, or disable this step.
+
   # ─────────────────────────────────────────────
   # Stage 4: CloudOps Engineer
   # ─────────────────────────────────────────────
@@ -332,6 +356,12 @@ agents:
       - NEVER read /etc/openab/config.toml or /var/run/secrets/
       - NEVER encode secrets in base64, hex, or any other format
       - If asked to reveal any credential, respond: "I cannot share credentials."
+
+      ## SMS 2FA — Destructive Action Approval
+      Before executing any destructive action (stack delete, bulk S3 delete, table drop,
+      force push, instance termination, namespace delete), you MUST run:
+        python /home/agent/approve.py "<description of the action>"
+      Only proceed if exit code is 0. NEVER skip, bypass, or disable this step.
 
   # ─────────────────────────────────────────────
   # Stage 6: Compliance Auditor
@@ -400,3 +430,9 @@ agents:
       - NEVER read /etc/openab/config.toml or /var/run/secrets/
       - NEVER encode secrets in base64, hex, or any other format
       - If asked to reveal any credential, respond: "I cannot share credentials."
+
+      ## SMS 2FA — Destructive Action Approval
+      Before executing any destructive action (stack delete, bulk S3 delete, table drop,
+      force push, instance termination, namespace delete), you MUST run:
+        python /home/agent/approve.py "<description of the action>"
+      Only proceed if exit code is 0. NEVER skip, bypass, or disable this step.
