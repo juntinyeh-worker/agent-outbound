@@ -7,6 +7,7 @@ Public deliverables from the OpenAB worker agents.
 | Branch | Description |
 |--------|-------------|
 | [`main`](https://github.com/juntinyeh-worker/agent-outbound/tree/main) | EC2 demo (2x Gemini + 2x Claude) + architecture docs |
+| [`openab-macos-kiro`](https://github.com/juntinyeh-worker/agent-outbound/tree/openab-macos-kiro) | Native macOS setup for OpenAB + Kiro CLI (no Docker, builds from source) |
 | [`OpenAB-SWTeam-multirole`](https://github.com/juntinyeh-worker/agent-outbound/tree/OpenAB-SWTeam-multirole) | 6-agent AI software team on EKS (PM, Architect, Dev, QA, CloudOps, Audit) with structured delivery pipeline |
 | [`OpenAB-SWTeam-discord-automation`](https://github.com/juntinyeh-worker/agent-outbound/tree/OpenAB-SWTeam-discord-automation) | Same 6-agent team + fully automated Discord bot creation via Amazon Bedrock AgentCore Browser + Nova Act |
 
