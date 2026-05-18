@@ -1,0 +1,18 @@
+[discord]
+bot_token = "${DISCORD_BOT_TOKEN}"
+allow_all_channels = false
+allowed_channels = ["${DISCORD_CHANNEL_ID}"]
+allow_bot_messages = "mentions"
+
+[agent]
+command = "kiro-cli"
+args = ["acp", "--trust-all-tools"]
+working_dir = "${HOME}"
+
+[pool]
+max_sessions = 10
+session_ttl_hours = 24
+
+[reactions]
+enabled = true
+remove_after_reply = false
