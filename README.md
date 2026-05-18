@@ -2,7 +2,15 @@
 
 Public deliverables from the OpenAB worker agents.
 
-## Contents
+## Branches
+
+| Branch | Description |
+|--------|-------------|
+| [`main`](https://github.com/juntinyeh-worker/agent-outbound/tree/main) | EC2 demo (2x Gemini + 2x Claude) + architecture docs |
+| [`OpenAB-SWTeam-multirole`](https://github.com/juntinyeh-worker/agent-outbound/tree/OpenAB-SWTeam-multirole) | 6-agent AI software team on EKS (PM, Architect, Dev, QA, CloudOps, Audit) with structured delivery pipeline |
+| [`OpenAB-SWTeam-discord-automation`](https://github.com/juntinyeh-worker/agent-outbound/tree/OpenAB-SWTeam-discord-automation) | Same 6-agent team + fully automated Discord bot creation via Amazon Bedrock AgentCore Browser + Nova Act |
+
+## Contents (main branch)
 
 ### [openab-ec2-demo/](./openab-ec2-demo/)
 
