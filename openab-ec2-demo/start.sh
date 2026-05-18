@@ -11,6 +11,7 @@ if [ ! -f .env ]; then
 fi
 set -a; source .env; set +a
 
+# Validate required vars
 MISSING=""
 for var in DISCORD_BOT_TOKEN_GEMINI1 DISCORD_BOT_TOKEN_GEMINI2 \
            DISCORD_BOT_TOKEN_CLAUDE1 DISCORD_BOT_TOKEN_CLAUDE2 \
@@ -27,11 +28,23 @@ if [ -n "$MISSING" ]; then
   exit 1
 fi
 
-# Render configs
+# Render agent configs
 mkdir -p config/.rendered
 for agent in gemini1 gemini2 claude1 claude2; do
   envsubst < "config/${agent}.toml" > "config/.rendered/${agent}.toml"
 done
+
+# Render MCP configs (skip if Atlassian not configured)
+if [ -n "${ATLASSIAN_URL:-}" ]; then
+  envsubst < "config/mcp-gemini.json" > "config/.rendered/mcp-gemini.json"
+  envsubst < "config/mcp-claude.json" > "config/.rendered/mcp-claude.json"
+  echo "✓ Atlassian MCP configured"
+else
+  # Empty MCP config — no servers
+  echo '{"mcpServers":{}}' > "config/.rendered/mcp-gemini.json"
+  echo '{"mcpServers":{}}' > "config/.rendered/mcp-claude.json"
+  echo "ℹ Atlassian not configured (optional)"
+fi
 
 # Docker command
 DOCKER="docker"

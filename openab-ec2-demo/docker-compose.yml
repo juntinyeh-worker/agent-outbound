@@ -1,4 +1,4 @@
-# OpenAB 4-Agent Demo — 2x Gemini + 2x Claude
+# OpenAB 4-Agent Demo — 2x Gemini + 2x Claude (with 3rd-party integrations)
 services:
   agent-gemini-1:
     image: openab-gemini:latest
@@ -8,9 +8,13 @@ services:
     environment:
       - GEMINI_API_KEY=${GEMINI_API_KEY}
       - GH_TOKEN=${GH_TOKEN:-}
+      - ATLASSIAN_URL=${ATLASSIAN_URL:-}
+      - ATLASSIAN_EMAIL=${ATLASSIAN_EMAIL:-}
+      - ATLASSIAN_API_TOKEN=${ATLASSIAN_API_TOKEN:-}
     volumes:
       - gemini1-home:/home/node
       - ./config/.rendered/gemini1.toml:/etc/openab/config.toml:ro
+      - ./config/.rendered/mcp-gemini.json:/home/node/.gemini/settings.json:ro
     healthcheck:
       test: ["CMD", "pgrep", "-x", "openab"]
       interval: 30s
@@ -25,9 +29,13 @@ services:
     environment:
       - GEMINI_API_KEY=${GEMINI_API_KEY}
       - GH_TOKEN=${GH_TOKEN:-}
+      - ATLASSIAN_URL=${ATLASSIAN_URL:-}
+      - ATLASSIAN_EMAIL=${ATLASSIAN_EMAIL:-}
+      - ATLASSIAN_API_TOKEN=${ATLASSIAN_API_TOKEN:-}
     volumes:
       - gemini2-home:/home/node
       - ./config/.rendered/gemini2.toml:/etc/openab/config.toml:ro
+      - ./config/.rendered/mcp-gemini.json:/home/node/.gemini/settings.json:ro
     healthcheck:
       test: ["CMD", "pgrep", "-x", "openab"]
       interval: 30s
@@ -42,9 +50,13 @@ services:
     environment:
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
       - GH_TOKEN=${GH_TOKEN:-}
+      - ATLASSIAN_URL=${ATLASSIAN_URL:-}
+      - ATLASSIAN_EMAIL=${ATLASSIAN_EMAIL:-}
+      - ATLASSIAN_API_TOKEN=${ATLASSIAN_API_TOKEN:-}
     volumes:
       - claude1-home:/home/node
       - ./config/.rendered/claude1.toml:/etc/openab/config.toml:ro
+      - ./config/.rendered/mcp-claude.json:/home/node/.claude/settings.json:ro
     healthcheck:
       test: ["CMD", "pgrep", "-x", "openab"]
       interval: 30s
@@ -59,9 +71,13 @@ services:
     environment:
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
       - GH_TOKEN=${GH_TOKEN:-}
+      - ATLASSIAN_URL=${ATLASSIAN_URL:-}
+      - ATLASSIAN_EMAIL=${ATLASSIAN_EMAIL:-}
+      - ATLASSIAN_API_TOKEN=${ATLASSIAN_API_TOKEN:-}
     volumes:
       - claude2-home:/home/node
       - ./config/.rendered/claude2.toml:/etc/openab/config.toml:ro
+      - ./config/.rendered/mcp-claude.json:/home/node/.claude/settings.json:ro
     healthcheck:
       test: ["CMD", "pgrep", "-x", "openab"]
       interval: 30s

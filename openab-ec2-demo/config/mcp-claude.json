@@ -1,0 +1,22 @@
+{
+  "mcpServers": {
+    "atlassian-jira": {
+      "command": "npx",
+      "args": ["-y", "@aashari/mcp-server-atlassian-jira"],
+      "env": {
+        "ATLASSIAN_URL": "${ATLASSIAN_URL}",
+        "ATLASSIAN_EMAIL": "${ATLASSIAN_EMAIL}",
+        "ATLASSIAN_API_TOKEN": "${ATLASSIAN_API_TOKEN}"
+      }
+    },
+    "atlassian-confluence": {
+      "command": "npx",
+      "args": ["-y", "@aashari/mcp-server-atlassian-confluence"],
+      "env": {
+        "ATLASSIAN_URL": "${ATLASSIAN_URL}",
+        "ATLASSIAN_EMAIL": "${ATLASSIAN_EMAIL}",
+        "ATLASSIAN_API_TOKEN": "${ATLASSIAN_API_TOKEN}"
+      }
+    }
+  }
+}
