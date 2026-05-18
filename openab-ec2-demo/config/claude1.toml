@@ -1,14 +1,14 @@
 [discord]
-bot_token = "${DISCORD_BOT_TOKEN_KIRO}"
+bot_token = "${DISCORD_BOT_TOKEN_CLAUDE1}"
 allow_all_channels = false
 allowed_channels = ["${DISCORD_CHANNEL_ID}"]
 allow_bot_messages = "mentions"
-trusted_bot_ids = []
 
 [agent]
-command = "kiro-cli"
-args = ["acp", "--trust-all-tools"]
-working_dir = "/home/agent"
+command = "claude-agent-acp"
+args = []
+working_dir = "/home/node"
+env = { ANTHROPIC_API_KEY = "${ANTHROPIC_API_KEY}" }
 
 [pool]
 max_sessions = 10

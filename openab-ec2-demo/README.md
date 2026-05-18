@@ -1,6 +1,6 @@
-# OpenAB 4-Agent EC2 Demo
+# OpenAB 4-Agent EC2 Demo — 2x Gemini + 2x Claude
 
-Deploy 4 AI agents (Kiro, Claude, Gemini, Codex) on a single EC2 with one command.
+One-line install on a fresh EC2. Builds images from source, sets up swap, launches 4 agents.
 
 ## One-Line Install
 
@@ -11,23 +11,33 @@ curl -fsSL https://raw.githubusercontent.com/juntinyeh-worker/agent-outbound/mai
 Then:
 ```bash
 cd ~/openab-demo
-vim .env        # fill in your tokens and keys
-./start.sh      # launch all 4 agents
+vim .env        # fill in bot tokens + API keys
+./start.sh      # launch
 ```
 
-## Prerequisites
+## What It Does
 
-- EC2: Amazon Linux 2023 or Ubuntu 22.04+ (`t3.large` recommended for 4 agents)
-- Security group: outbound HTTPS (443) open
-- 4 Discord bot tokens + 1 channel ID
-- API keys: Kiro, Anthropic, Google Gemini, OpenAI
+1. Installs Docker + Docker Compose + git + envsubst
+2. Clones OpenAB source → builds `openab-gemini` and `openab-claude` images locally
+3. Downloads compose + config files to `~/openab-demo`
+4. Creates 4GB swap to prevent OOM
+5. You fill `.env`, run `./start.sh` → 4 agents online
 
-## What the Installer Does
+## Requirements
 
-1. Installs Docker + Docker Compose
-2. Installs `envsubst` for config rendering
-3. Downloads all project files to `~/openab-demo`
-4. Creates `.env` template for you to fill in
+- EC2: `t3.large` (8GB RAM) recommended, Amazon Linux 2023 or Ubuntu 22.04+
+- Security group: outbound 443 open
+- 4 Discord bot tokens (create at https://discord.com/developers)
+- API keys: Google Gemini, Anthropic
+
+## Agents
+
+| Container | Bot Token Var | Backend |
+|---|---|---|
+| openab-gemini-1 | `DISCORD_BOT_TOKEN_GEMINI1` | Gemini CLI |
+| openab-gemini-2 | `DISCORD_BOT_TOKEN_GEMINI2` | Gemini CLI |
+| openab-claude-1 | `DISCORD_BOT_TOKEN_CLAUDE1` | Claude Code |
+| openab-claude-2 | `DISCORD_BOT_TOKEN_CLAUDE2` | Claude Code |
 
 ## Operations
 
@@ -35,20 +45,12 @@ vim .env        # fill in your tokens and keys
 cd ~/openab-demo
 docker compose ps              # status
 docker compose logs -f         # all logs
-docker compose logs agent-kiro # single agent
-docker compose restart         # restart all
-docker compose down            # stop all
-docker compose pull && ./start.sh  # update images
+docker compose restart         # restart
+docker compose down            # stop
 ```
 
-## Architecture
-
+Rebuild images after OpenAB updates:
+```bash
+rm -rf ~/.openab-src
+curl -fsSL .../install.sh | bash   # re-clones and rebuilds
 ```
-EC2 (t3.large)
-├── openab-kiro    → ghcr.io/openabdev/openab        (kiro-cli)
-├── openab-claude  → ghcr.io/openabdev/openab-claude  (claude-agent-acp)
-├── openab-gemini  → ghcr.io/openabdev/openab-gemini  (gemini --acp)
-└── openab-codex   → ghcr.io/openabdev/openab-codex   (codex --acp)
-```
-
-All agents share one Discord channel with `allow_bot_messages = "mentions"` for inter-agent collaboration.

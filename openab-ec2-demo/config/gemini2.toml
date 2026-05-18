@@ -1,9 +1,8 @@
 [discord]
-bot_token = "${DISCORD_BOT_TOKEN_GEMINI}"
+bot_token = "${DISCORD_BOT_TOKEN_GEMINI2}"
 allow_all_channels = false
 allowed_channels = ["${DISCORD_CHANNEL_ID}"]
 allow_bot_messages = "mentions"
-trusted_bot_ids = []
 
 [agent]
 command = "gemini"

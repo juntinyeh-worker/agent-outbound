@@ -1,15 +1,14 @@
 [discord]
-bot_token = "${DISCORD_BOT_TOKEN_CODEX}"
+bot_token = "${DISCORD_BOT_TOKEN_CLAUDE2}"
 allow_all_channels = false
 allowed_channels = ["${DISCORD_CHANNEL_ID}"]
 allow_bot_messages = "mentions"
-trusted_bot_ids = []
 
 [agent]
-command = "codex"
-args = ["--acp"]
+command = "claude-agent-acp"
+args = []
 working_dir = "/home/node"
-env = { OPENAI_API_KEY = "${OPENAI_API_KEY}" }
+env = { ANTHROPIC_API_KEY = "${ANTHROPIC_API_KEY}" }
 
 [pool]
 max_sessions = 10
