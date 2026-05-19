@@ -172,20 +172,204 @@ trusted_bot_ids = []              # accept from any bot (or restrict)
 
 ---
 
+## Approach D: Single Bot + Router + Backend Agents
+
+One bot token, one OpenAB instance (the router), but multiple **isolated agent containers** behind it. The router agent orchestrates by calling backend agents as tools.
+
+```mermaid
+graph TB
+    HUMAN["👤 Human"] -->|"message"| DISCORD["Discord<br/>(1 bot token)"]
+    DISCORD -->|"WSS"| OPENAB["OpenAB + Router Agent"]
+
+    OPENAB -->|"tool call"| AGENT1["Agent-1: Planner"]
+    OPENAB -->|"tool call"| AGENT2["Agent-2: Developer"]
+    OPENAB -->|"tool call"| AGENT3["Agent-3: Reviewer"]
+
+    AGENT1 -->|"result"| OPENAB
+    AGENT2 -->|"result"| OPENAB
+    AGENT3 -->|"result"| OPENAB
+    OPENAB -->|"reply"| DISCORD
+```
+
+**How it works:**
+- Router agent receives all Discord messages (it holds the single bot token)
+- Backend agents run as separate containers with **no Discord connection**
+- Router calls them as MCP tool servers over HTTP
+- Router's AGENTS.md instructs it how to orchestrate (which agent for which task)
+- Inter-agent: Router mediates — passes Agent-1's output as context to Agent-2
+
+**Router's AGENTS.md:**
+```markdown
+You have access to specialized agents as tools:
+- **planner**: requirements, architecture decisions
+- **developer**: code implementation
+- **reviewer**: code review and testing
+
+Break tasks into steps, call the right agent, pass outputs between them.
+```
+
+### Service Discovery: How the Router Finds Backend Agents
+
+The router calls backend agents via HTTP (MCP over HTTP or simple REST). The question is: **how does it know the URL?**
+
+| Platform | Service Discovery | Agent URL |
+|----------|------------------|-----------|
+| **EC2 Docker Compose** | Docker DNS (container names) | `http://planner:8080` |
+| **EKS** | Kubernetes Service DNS | `http://planner.openab.svc.cluster.local:8080` |
+| **ECS Fargate** | CloudMap (Service Connect) | `http://planner.openab.local:8080` |
+
+#### EC2 Docker Compose
+
+Containers on the same Docker network resolve each other by name:
+
+```yaml
+services:
+  router:
+    image: openab-gemini:latest
+    volumes:
+      - ./config/mcp-router.json:/home/node/.gemini/settings.json:ro
+    # ...
+
+  planner:
+    image: openab-gemini:latest
+    command: ["mcp-server", "--port", "8080", "--prompt", "/etc/agent/planner.md"]
+    # No Discord token — backend only
+
+  developer:
+    image: openab-claude:latest
+    command: ["mcp-server", "--port", "8080", "--prompt", "/etc/agent/developer.md"]
+```
+
+MCP config for router:
+```json
+{
+  "mcpServers": {
+    "planner": { "url": "http://planner:8080/mcp" },
+    "developer": { "url": "http://developer:8080/mcp" }
+  }
+}
+```
+
+#### EKS (Kubernetes)
+
+Each backend agent is a Service + Deployment. Kubernetes DNS provides discovery:
+
+```mermaid
+graph LR
+    subgraph EKS["EKS Cluster"]
+        ROUTER["Pod: Router<br/>(has bot token)"]
+        SVC1["Service: planner<br/>→ Pod: planner"]
+        SVC2["Service: developer<br/>→ Pod: developer"]
+    end
+    ROUTER -->|"http://planner.openab.svc.cluster.local:8080"| SVC1
+    ROUTER -->|"http://developer.openab.svc.cluster.local:8080"| SVC2
+```
+
+```yaml
+# Kubernetes Service for backend agent
+apiVersion: v1
+kind: Service
+metadata:
+  name: planner
+  namespace: openab
+spec:
+  selector:
+    app: planner
+  ports:
+    - port: 8080
+```
+
+Router's MCP config:
+```json
+{
+  "mcpServers": {
+    "planner": { "url": "http://planner.openab.svc.cluster.local:8080/mcp" },
+    "developer": { "url": "http://developer.openab.svc.cluster.local:8080/mcp" }
+  }
+}
+```
+
+#### ECS Fargate (Service Connect / CloudMap)
+
+ECS Service Connect provides DNS-based discovery within a namespace:
+
+```mermaid
+graph LR
+    subgraph ECS["ECS Cluster + Service Connect"]
+        ROUTER["Task: Router<br/>(has bot token)"]
+        SVC1["Service: planner<br/>→ Task"]
+        SVC2["Service: developer<br/>→ Task"]
+    end
+    CLOUDMAP["CloudMap Namespace:<br/>openab.local"]
+    ROUTER -->|"http://planner.openab.local:8080"| SVC1
+    ROUTER -->|"http://developer.openab.local:8080"| SVC2
+    CLOUDMAP -.->|"DNS"| SVC1 & SVC2
+```
+
+ECS task definition for router references agents by CloudMap name:
+```json
+{
+  "mcpServers": {
+    "planner": { "url": "http://planner.openab.local:8080/mcp" },
+    "developer": { "url": "http://developer.openab.local:8080/mcp" }
+  }
+}
+```
+
+Enable Service Connect on the ECS cluster:
+```bash
+aws ecs create-service \
+  --service-name planner \
+  --service-connect-configuration '{
+    "enabled": true,
+    "namespace": "openab.local",
+    "services": [{"portName": "mcp", "clientAliases": [{"port": 8080, "dnsName": "planner.openab.local"}]}]
+  }'
+```
+
+### Summary: One Config, Three Platforms
+
+The router's MCP config is the **only thing that changes** between platforms:
+
+| Platform | Agent URL Pattern |
+|----------|-----------------|
+| Docker Compose | `http://<container-name>:8080` |
+| EKS | `http://<service>.<namespace>.svc.cluster.local:8080` |
+| ECS | `http://<service>.<namespace>.local:8080` |
+
+Everything else (images, AGENTS.md, agent behavior) stays identical.
+
+### Inter-Agent Communication
+
+```mermaid
+sequenceDiagram
+    participant Human
+    participant Router as Router Agent
+    participant Planner as Backend: Planner
+    participant Dev as Backend: Developer
+
+    Human->>Router: "Build me a REST API for user management"
+    Router->>Router: Break into steps
+    Router->>Planner: [MCP tool call] "Define requirements for user management REST API"
+    Planner-->>Router: "Requirements: 3 endpoints (CRUD), DynamoDB, Cognito auth..."
+    Router->>Dev: [MCP tool call] "Implement based on: [planner's output]"
+    Dev-->>Router: "Done. Code at branch workspace/user-api. Tests pass."
+    Router->>Human: "Built your API. Here's what was done: [summary]"
+```
+
+**Key point:** Backend agents never talk to each other directly. The router passes context between them. This keeps the architecture simple and avoids coordination complexity.
+
 ## Recommendation
 
 | Scenario | Best Approach |
 |----------|--------------|
-| You literally have 1 bot token only | **A** (Pipeline) or **B** (Subagent) |
-| You want visible multi-agent conversation | **C** (Shared Channel) |
-| Sequential workflow (plan → build → test) | **A** (Pipeline) |
-| Parallel research + implementation | **B** (Subagent) |
-| Autonomous agents that hand off work | **C** (Shared Channel) |
-| Demo / showcase multi-agent collaboration | **C** (Shared Channel) — most impressive visually |
+| 1 bot token, simple sequential workflow | **A** (Pipeline) |
+| 1 bot token, parallel sub-tasks | **B** (Subagent) |
+| 1 bot token, isolated specialized agents | **D** (Router + Backend Agents) |
+| Multiple bot tokens, visible collaboration | **C** (Shared Channel) |
+| Demo / showcase multi-agent | **C** or **D** |
 
 ---
-
-## Inter-Agent Message Exchange Summary
 
 | Approach | Mechanism | Format |
 |----------|-----------|--------|
