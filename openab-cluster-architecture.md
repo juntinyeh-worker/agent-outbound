@@ -2,6 +2,27 @@
 
 > Updated by SpongeBob — 2026-04-27 | Based on UncleBob's original (2026-04-25)
 
+## High-Level Concept
+
+```mermaid
+graph LR
+    HUMAN["👤 Human"] -->|"message"| IM["💬 IM Platform<br/>(Discord / Slack / LINE)"]
+    IM -->|"bot gateway /<br/>webhook"| OPENAB["⚙️ OpenAB<br/>(ACP Harness)"]
+    OPENAB -->|"JSON-RPC<br/>(stdio)"| AGENT["🤖 Agent CLI<br/>(Kiro / Claude / Gemini)"]
+    AGENT -->|"response"| OPENAB
+    OPENAB -->|"reply"| IM
+    IM -->|"display"| HUMAN
+```
+
+**The flow:**
+1. **Human** sends a message in an IM platform (Discord, Slack, LINE)
+2. **IM Platform** delivers it to OpenAB via bot gateway (WebSocket) or webhook
+3. **OpenAB** (the harness) manages sessions, queues, and reactions — spawns an Agent CLI process via ACP (Agent Client Protocol)
+4. **Agent CLI** (Kiro, Claude Code, Gemini, etc.) processes the request, calls LLM APIs, uses tools
+5. Response flows back: Agent → OpenAB → IM → Human
+
+---
+
 ## Overview
 
 Three EKS clusters in `us-east-1` serve the OpenAB multi-agent platform:
