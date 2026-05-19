@@ -30,6 +30,10 @@ curl -fsSL https://raw.githubusercontent.com/juntinyeh-worker/agent-outbound/mai
 
 Architecture overview of the OpenAB EKS cluster deployment (production).
 
+### [openab-ecs-lambda-architecture.md](./openab-ecs-lambda-architecture.md)
+
+Architecture overview of the ECS Fargate + Lambda deployment (serverless, Admin on Lambda, Workers on Fargate).
+
 ### [openab-ec2-architecture.md](./openab-ec2-architecture.md)
 
 Architecture overview of the Docker Compose single-EC2 deployment (POC/demo).
