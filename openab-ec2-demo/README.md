@@ -1,6 +1,6 @@
-# OpenAB 4-Agent EC2 Demo — 2x Gemini + 2x Claude
+# OpenAB Agent EC2 Demo
 
-One-line install on a fresh EC2. Builds images from source, sets up swap, launches 4 agents.
+One-line installer to deploy AI agents on a single EC2 instance. Three scenarios available.
 
 ## One-Line Install
 
@@ -11,46 +11,68 @@ curl -fsSL https://raw.githubusercontent.com/juntinyeh-worker/agent-outbound/mai
 Then:
 ```bash
 cd ~/openab-demo
-vim .env        # fill in bot tokens + API keys
-./start.sh      # launch
+vim .env                    # fill in bot tokens + API keys
+./start.sh                  # pick a scenario (see below)
 ```
 
-## What It Does
+## Scenarios
 
-1. Installs Docker + Docker Compose + git + envsubst
-2. Clones OpenAB source → builds `openab-gemini` and `openab-claude` images locally
-3. Downloads compose + config files to `~/openab-demo`
-4. Creates 4GB swap to prevent OOM
-5. You fill `.env`, run `./start.sh` → 4 agents online
+| Command | Agents | Bot Tokens Needed | API Keys |
+|---------|--------|-------------------|----------|
+| `./start.sh` | 2x Gemini + 2x Claude | 4 | Gemini + Anthropic |
+| `./start.sh gemini3` | 3x Gemini | 3 | Gemini |
+| `./start.sh claude2` | 2x Claude | 2 | Anthropic |
 
 ## Requirements
 
-- EC2: `t3.large` (8GB RAM) recommended, Amazon Linux 2023 or Ubuntu 22.04+
+- EC2: `t3.large` (8GB RAM) recommended
+- Amazon Linux 2023 or Ubuntu 22.04+
 - Security group: outbound 443 open
-- 4 Discord bot tokens (create at https://discord.com/developers)
-- API keys: Google Gemini, Anthropic
+- Discord bot tokens (one per agent)
+- API keys for your chosen scenario
 
-## Agents
+## What the Installer Does
 
-| Container | Bot Token Var | Backend |
-|---|---|---|
-| openab-gemini-1 | `DISCORD_BOT_TOKEN_GEMINI1` | Gemini CLI |
-| openab-gemini-2 | `DISCORD_BOT_TOKEN_GEMINI2` | Gemini CLI |
-| openab-claude-1 | `DISCORD_BOT_TOKEN_CLAUDE1` | Claude Code |
-| openab-claude-2 | `DISCORD_BOT_TOKEN_CLAUDE2` | Claude Code |
+1. Installs Docker + Docker Compose + git + envsubst
+2. Builds `openab-gemini` and `openab-claude` images from source
+3. Downloads all compose files + config templates
+4. Sets up 4GB swap to prevent OOM
 
 ## Operations
 
 ```bash
 cd ~/openab-demo
-docker compose ps              # status
-docker compose logs -f         # all logs
-docker compose restart         # restart
-docker compose down            # stop
+
+# Status / logs
+docker compose ps
+docker compose logs -f
+
+# Stop
+docker compose down
+
+# Switch scenario (stop current first)
+docker compose down
+./start.sh gemini3
+
+# Rebuild images after OpenAB updates
+rm -rf ~/.openab-src
+docker rmi openab-gemini:latest openab-claude:latest
+# Re-run install script
 ```
 
-Rebuild images after OpenAB updates:
-```bash
-rm -rf ~/.openab-src
-curl -fsSL .../install.sh | bash   # re-clones and rebuilds
+## File Structure
+
+```
+~/openab-demo/
+├── docker-compose.yml           # Scenario A: 2x Gemini + 2x Claude
+├── docker-compose.gemini3.yml   # Scenario B: 3x Gemini
+├── docker-compose.claude2.yml   # Scenario C: 2x Claude
+├── start.sh                     # Launcher (picks scenario)
+├── .env                         # Your secrets
+└── config/
+    ├── gemini1.toml             # Agent config templates
+    ├── gemini2.toml
+    ├── gemini3.toml
+    ├── claude1.toml
+    └── claude2.toml
 ```

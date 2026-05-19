@@ -1,4 +1,4 @@
-# Scenario A: 2x Gemini + 2x Claude
+# Scenario B: 3x Gemini
 services:
   agent-gemini-1:
     image: openab-gemini:latest
@@ -34,34 +34,17 @@ services:
       timeout: 5s
       retries: 3
 
-  agent-claude-1:
-    image: openab-claude:latest
-    container_name: openab-claude-1
+  agent-gemini-3:
+    image: openab-gemini:latest
+    container_name: openab-gemini-3
     restart: unless-stopped
     env_file: .env
     environment:
-      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
       - GH_TOKEN=${GH_TOKEN:-}
     volumes:
-      - claude1-home:/home/node
-      - ./config/.rendered/claude1.toml:/etc/openab/config.toml:ro
-    healthcheck:
-      test: ["CMD", "pgrep", "-x", "openab"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-
-  agent-claude-2:
-    image: openab-claude:latest
-    container_name: openab-claude-2
-    restart: unless-stopped
-    env_file: .env
-    environment:
-      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
-      - GH_TOKEN=${GH_TOKEN:-}
-    volumes:
-      - claude2-home:/home/node
-      - ./config/.rendered/claude2.toml:/etc/openab/config.toml:ro
+      - gemini3-home:/home/node
+      - ./config/.rendered/gemini3.toml:/etc/openab/config.toml:ro
     healthcheck:
       test: ["CMD", "pgrep", "-x", "openab"]
       interval: 30s
@@ -71,5 +54,4 @@ services:
 volumes:
   gemini1-home:
   gemini2-home:
-  claude1-home:
-  claude2-home:
+  gemini3-home:

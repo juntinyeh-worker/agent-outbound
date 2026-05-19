@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# install.sh — One-line installer: 2x Gemini + 2x Claude on a fresh EC2
+# install.sh — One-line installer for OpenAB agent demo on a fresh EC2
 # Usage: curl -fsSL https://raw.githubusercontent.com/juntinyeh-worker/agent-outbound/main/openab-ec2-demo/install.sh | bash
 set -euo pipefail
 
@@ -7,7 +7,7 @@ REPO_URL="https://raw.githubusercontent.com/juntinyeh-worker/agent-outbound/main
 INSTALL_DIR="$HOME/openab-demo"
 
 echo "════════════════════════════════════════════════════════════"
-echo " OpenAB 4-Agent Demo — 2x Gemini + 2x Claude"
+echo " OpenAB Agent Demo — One-Line Installer"
 echo "════════════════════════════════════════════════════════════"
 
 ###############################################################################
@@ -82,7 +82,7 @@ fi
 ###############################################################################
 # Step 3: Build agent images from source
 ###############################################################################
-echo "==> [3/5] Building agent images (this takes a few minutes on first run)..."
+echo "==> [3/5] Building agent images (takes a few minutes on first run)..."
 OPENAB_SRC="$HOME/.openab-src"
 if [ ! -d "$OPENAB_SRC" ]; then
   git clone --depth 1 https://github.com/openabdev/openab.git "$OPENAB_SRC"
@@ -109,14 +109,16 @@ echo "==> [4/5] Downloading configuration..."
 mkdir -p "$INSTALL_DIR/config"
 cd "$INSTALL_DIR"
 
-for f in docker-compose.yml .env.example start.sh \
-         config/gemini1.toml config/gemini2.toml config/claude1.toml config/claude2.toml; do
+for f in docker-compose.yml docker-compose.gemini3.yml docker-compose.claude2.yml \
+         .env.example start.sh \
+         config/gemini1.toml config/gemini2.toml config/gemini3.toml \
+         config/claude1.toml config/claude2.toml; do
   curl -fsSL "$REPO_URL/$f" -o "$f"
 done
 chmod +x start.sh
 
 ###############################################################################
-# Step 5: Setup swap (4GB) to prevent OOM
+# Step 5: Setup swap (4GB)
 ###############################################################################
 echo "==> [5/5] Setting up swap..."
 if [ ! -f /swapfile ]; then
@@ -147,6 +149,10 @@ echo ""
 echo " Next steps:"
 echo ""
 echo "   cd $INSTALL_DIR"
-echo "   vim .env        # fill in bot tokens + API keys"
-echo "   ./start.sh      # launch all 4 agents"
+echo "   vim .env                    # fill in bot tokens + API keys"
+echo ""
+echo " Then pick a scenario:"
+echo "   ./start.sh                  # 2x Gemini + 2x Claude"
+echo "   ./start.sh gemini3          # 3x Gemini"
+echo "   ./start.sh claude2          # 2x Claude"
 echo ""

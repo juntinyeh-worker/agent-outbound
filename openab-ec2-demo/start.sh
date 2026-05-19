@@ -1,9 +1,15 @@
 #!/usr/bin/env bash
 # start.sh — Validate config, render templates, launch agents
+# Usage:
+#   ./start.sh                  # Scenario A: 2x Gemini + 2x Claude (default)
+#   ./start.sh gemini3          # Scenario B: 3x Gemini
+#   ./start.sh claude2          # Scenario C: 2x Claude
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
+
+SCENARIO="${1:-default}"
 
 if [ ! -f .env ]; then
   echo "ERROR: .env not found. Run: cp .env.example .env && vim .env"
@@ -11,11 +17,28 @@ if [ ! -f .env ]; then
 fi
 set -a; source .env; set +a
 
+# Determine which compose file and agents to render
+case "$SCENARIO" in
+  gemini3)
+    COMPOSE_FILE="docker-compose.gemini3.yml"
+    AGENTS="gemini1 gemini2 gemini3"
+    REQUIRED_VARS="DISCORD_BOT_TOKEN_GEMINI1 DISCORD_BOT_TOKEN_GEMINI2 DISCORD_BOT_TOKEN_GEMINI3 DISCORD_CHANNEL_ID GEMINI_API_KEY"
+    ;;
+  claude2)
+    COMPOSE_FILE="docker-compose.claude2.yml"
+    AGENTS="claude1 claude2"
+    REQUIRED_VARS="DISCORD_BOT_TOKEN_CLAUDE1 DISCORD_BOT_TOKEN_CLAUDE2 DISCORD_CHANNEL_ID ANTHROPIC_API_KEY"
+    ;;
+  *)
+    COMPOSE_FILE="docker-compose.yml"
+    AGENTS="gemini1 gemini2 claude1 claude2"
+    REQUIRED_VARS="DISCORD_BOT_TOKEN_GEMINI1 DISCORD_BOT_TOKEN_GEMINI2 DISCORD_BOT_TOKEN_CLAUDE1 DISCORD_BOT_TOKEN_CLAUDE2 DISCORD_CHANNEL_ID GEMINI_API_KEY ANTHROPIC_API_KEY"
+    ;;
+esac
+
 # Validate required vars
 MISSING=""
-for var in DISCORD_BOT_TOKEN_GEMINI1 DISCORD_BOT_TOKEN_GEMINI2 \
-           DISCORD_BOT_TOKEN_CLAUDE1 DISCORD_BOT_TOKEN_CLAUDE2 \
-           DISCORD_CHANNEL_ID GEMINI_API_KEY ANTHROPIC_API_KEY; do
+for var in $REQUIRED_VARS; do
   val="${!var:-}"
   if [ -z "$val" ] || [[ "$val" == your-* ]]; then
     MISSING="$MISSING $var"
@@ -30,31 +53,19 @@ fi
 
 # Render agent configs
 mkdir -p config/.rendered
-for agent in gemini1 gemini2 claude1 claude2; do
+for agent in $AGENTS; do
   envsubst < "config/${agent}.toml" > "config/.rendered/${agent}.toml"
 done
-
-# Render MCP configs (skip if Atlassian not configured)
-if [ -n "${ATLASSIAN_URL:-}" ]; then
-  envsubst < "config/mcp-gemini.json" > "config/.rendered/mcp-gemini.json"
-  envsubst < "config/mcp-claude.json" > "config/.rendered/mcp-claude.json"
-  echo "✓ Atlassian MCP configured"
-else
-  # Empty MCP config — no servers
-  echo '{"mcpServers":{}}' > "config/.rendered/mcp-gemini.json"
-  echo '{"mcpServers":{}}' > "config/.rendered/mcp-claude.json"
-  echo "ℹ Atlassian not configured (optional)"
-fi
 
 # Docker command
 DOCKER="docker"
 if ! docker info &>/dev/null 2>&1; then DOCKER="sudo docker"; fi
 
-$DOCKER compose up -d
+$DOCKER compose -f "$COMPOSE_FILE" up -d
 
 echo ""
-echo "✅ All 4 agents running!"
+echo "✅ Agents running! (scenario: $SCENARIO)"
 echo ""
-echo "   $DOCKER compose ps        # status"
-echo "   $DOCKER compose logs -f   # logs"
-echo "   $DOCKER compose down      # stop"
+echo "   $DOCKER compose -f $COMPOSE_FILE ps        # status"
+echo "   $DOCKER compose -f $COMPOSE_FILE logs -f   # logs"
+echo "   $DOCKER compose -f $COMPOSE_FILE down      # stop"
