@@ -1,10 +1,10 @@
 # OpenAB ECS Fargate + Lambda Architecture
 
-> Serverless-first deployment — Admin on Lambda, Workers on ECS Fargate
+> Serverless-first deployment — Admin on Lambda, 2 Workers on ECS Fargate
 
 ## Overview
 
-A middle-ground architecture between the single-EC2 POC and the full EKS production setup. The Admin agent runs as an event-driven Lambda function, while worker agents run as long-lived ECS Fargate services. No cluster management, no EC2 instances to maintain.
+A lightweight serverless architecture: Admin runs as a Lambda function (control plane), worker agents run as ECS Fargate services (data plane). No servers to manage, pay only for what you use.
 
 ---
 
@@ -12,14 +12,12 @@ A middle-ground architecture between the single-EC2 POC and the full EKS product
 
 | | EC2 Docker Compose (POC) | ECS Fargate + Lambda | EKS (Production) |
 |---|---|---|---|
-| **Admin agent** | Same container | Lambda (event-driven) | Dedicated EKS cluster |
-| **Worker agents** | Docker containers | ECS Fargate services | EKS pods |
+| **Admin** | Same container | Lambda (event-driven) | Dedicated EKS cluster |
+| **Workers** | Docker containers | ECS Fargate services | EKS pods |
 | **Infra management** | Manual | Managed (no servers) | eksctl / Helm |
-| **Scaling** | Vertical (resize EC2) | Per-service (Fargate tasks) | Horizontal (nodes + pods) |
-| **Cost (idle)** | ~$60/month (always on) | ~$30–50/month (Fargate only) | ~$200+/month |
-| **Cost (active)** | Same | Pay-per-use Lambda + Fargate | Same |
+| **Scaling** | Vertical | Per-service (desired 0↔1) | Horizontal |
+| **Cost (idle)** | ~$60/month | ~$15–30/month | ~$200+/month |
 | **HA** | None | Multi-AZ (Fargate) | Multi-AZ (EKS) |
-| **Setup complexity** | Low | Medium | High |
 
 ---
 
@@ -30,35 +28,32 @@ graph TB
     HUMAN["👤 Human / Admin<br/>Discord"]
 
     subgraph AWS["AWS"]
-        subgraph ADMIN["Admin Layer (Control Plane)"]
+        subgraph ADMIN["Control Plane"]
             APIGW["API Gateway<br/>(slash commands)"]
             LAMBDA["Lambda: Admin<br/>Scale in/out · Diagnostics"]
             EVENTBRIDGE["EventBridge<br/>(scheduled health checks)"]
         end
 
-        subgraph WORKERS["ECS Fargate Cluster (Data Plane)"]
-            SVC1["Service: Gemini-1 🟦<br/>Fargate Task"]
-            SVC2["Service: Gemini-2 🟦<br/>Fargate Task"]
-            SVC3["Service: Claude-1 🟣<br/>Fargate Task"]
-            SVC4["Service: Claude-2 🟣<br/>Fargate Task"]
+        subgraph WORKERS["ECS Fargate Cluster"]
+            SVC1["Service: Agent-1<br/>(Kiro / Gemini / Claude)"]
+            SVC2["Service: Agent-2<br/>(Kiro / Gemini / Claude)"]
         end
 
         subgraph STORAGE["Storage"]
-            EFS["EFS<br/>(persistent /home per agent)"]
+            EFS["EFS<br/>(persistent /home)"]
             SSM["SSM Parameter Store<br/>(secrets)"]
             ECR["ECR<br/>(agent images)"]
         end
+    end
 
-        subgraph EXTERNAL["External"]
-            DISCORD["Discord API"]
-            GEMINI_API["Gemini API"]
-            ANTHROPIC_API["Anthropic API"]
-            GITHUB["GitHub"]
-        end
+    subgraph EXTERNAL["External Services"]
+        DISCORD["Discord API"]
+        LLM["LLM API<br/>(Gemini / Anthropic / Kiro)"]
+        GITHUB["GitHub"]
     end
 
     HUMAN -->|"@mention bot"| DISCORD
-    DISCORD -->|"Bot Gateway (WSS)"| SVC1 & SVC2 & SVC3 & SVC4
+    DISCORD -->|"Bot Gateway (WSS)"| SVC1 & SVC2
 
     HUMAN -->|"/admin command"| APIGW --> LAMBDA
     EVENTBRIDGE -->|"schedule"| LAMBDA
@@ -66,11 +61,10 @@ graph TB
     LAMBDA -->|"describe-tasks<br/>get-log-events"| WORKERS
     LAMBDA -->|"post status"| DISCORD
 
-    SVC1 & SVC2 -->|"API"| GEMINI_API
-    SVC3 & SVC4 -->|"API"| ANTHROPIC_API
-    SVC1 & SVC2 & SVC3 & SVC4 -->|"git"| GITHUB
-    SVC1 & SVC2 & SVC3 & SVC4 --- EFS
-    SVC1 & SVC2 & SVC3 & SVC4 -->|"read secrets"| SSM
+    SVC1 & SVC2 -->|"API"| LLM
+    SVC1 & SVC2 -->|"git"| GITHUB
+    SVC1 & SVC2 --- EFS
+    SVC1 & SVC2 -->|"read secrets"| SSM
     ECR -.->|"pull"| WORKERS
 ```
 
@@ -78,78 +72,58 @@ graph TB
 
 ## Component Breakdown
 
-### Admin Agent (Lambda)
+### Admin (Lambda) — Control Plane
 
-The Admin Lambda is **not** a conversational agent — it's a control-plane function that manages the worker fleet.
+The Admin Lambda is **not** a conversational agent. It manages the worker fleet.
 
 | Aspect | Detail |
 |--------|--------|
 | **Runtime** | Lambda (Python or Node.js) |
-| **Trigger** | EventBridge schedule + manual invocation (Discord slash command or CLI) |
-| **Responsibilities** | Scale workers in/out (desired count 0↔1), real-time diagnostics |
-| **State** | Stateless — reads ECS service status, CloudWatch metrics |
-| **Timeout** | 15 min max |
-| **Cost** | Near-zero (pay per invocation) |
-
-**What the Admin Lambda does:**
-
-| Action | When | ECS API Call |
-|--------|------|-------------|
-| **Scale out** (start worker) | Demand detected or manual trigger | `update-service --desired-count 1` |
-| **Scale in** (stop idle worker) | Worker idle for N minutes | `update-service --desired-count 0` |
-| **Diagnose** | On-demand (admin request) | `describe-tasks`, `get-log-events` |
-| **Health check** | Scheduled (every 5 min) | `describe-services`, restart unhealthy |
+| **Trigger** | EventBridge (scheduled) + API Gateway (Discord slash commands) |
+| **Responsibilities** | Scale workers in/out, health checks, diagnostics |
+| **Cost** | ~$0/month (pay per invocation) |
 
 ```mermaid
 graph LR
-    EVENTBRIDGE["EventBridge<br/>Schedule (every 5 min)"] --> LAMBDA["Lambda: Admin"]
-    SLASH["Discord Slash Command<br/>/admin scale gemini-1 up"] --> APIGW["API Gateway"] --> LAMBDA
-    LAMBDA -->|"update-service<br/>desired-count 0 or 1"| ECS["ECS API"]
-    LAMBDA -->|"describe-tasks<br/>get-log-events"| CW["CloudWatch"]
-    LAMBDA -->|"post status"| DISCORD["Discord Channel"]
+    EVENTBRIDGE["EventBridge<br/>(every 5 min)"] --> LAMBDA["Lambda: Admin"]
+    SLASH["/admin command"] --> APIGW["API Gateway"] --> LAMBDA
+    LAMBDA -->|"desired-count 0↔1"| ECS["ECS API"]
+    LAMBDA -->|"logs / metrics"| CW["CloudWatch"]
+    LAMBDA -->|"post status"| DISCORD["Discord"]
 ```
 
-**Why Lambda for Admin:**
-- Admin operations are infrequent and short-lived (set desired count, read logs)
-- No need to keep a process running 24/7 just to occasionally flip a switch
-- Workers handle their own Discord conversations — Admin doesn't route messages
-- Cost: ~$0/month (a few hundred invocations at most)
+**What it does:**
 
-**Scale-in/out logic (example):**
-```
-IF worker has no active sessions for 30 min → set desired-count = 0
-IF message arrives for a stopped worker → set desired-count = 1, reply "starting up..."
-```
+| Action | Trigger | API Call |
+|--------|---------|---------|
+| Start a worker | `/admin start agent-1` | `update-service --desired-count 1` |
+| Stop idle worker | Scheduled (idle > 30 min) | `update-service --desired-count 0` |
+| Diagnose | `/admin diagnose agent-1` | `describe-tasks` + `get-log-events` |
+| Health check | Scheduled (every 5 min) | `describe-services`, restart unhealthy |
 
-### Worker Agents (ECS Fargate)
+### Workers (ECS Fargate) — Data Plane
+
+Each worker is an ECS service running one Fargate task. Pick any agent CLI per service.
 
 | Aspect | Detail |
 |--------|--------|
-| **Runtime** | ECS Fargate (long-running service) |
-| **Image** | Same `openab-gemini` / `openab-claude` from ECR |
-| **Networking** | awsvpc mode, outbound-only (NAT Gateway or VPC endpoints) |
-| **Storage** | EFS mount for persistent `/home` |
-| **Secrets** | SSM Parameter Store → injected as env vars |
-| **Scaling** | Desired count per service (1 task = 1 agent) |
+| **Image options** | `openab` (Kiro), `openab-gemini`, `openab-claude` |
+| **Networking** | awsvpc, outbound-only via NAT Gateway |
+| **Storage** | EFS mount at `/home/node` or `/home/agent` |
+| **Secrets** | SSM → injected as env vars |
+| **Scaling** | Binary: desired-count 0 (off) or 1 (on) |
 
 ```mermaid
 graph TB
     subgraph ECS["ECS Fargate Cluster"]
-        subgraph SVC_G1["Service: gemini-1"]
-            TASK_G1["Task<br/>0.5 vCPU / 1GB"]
+        subgraph SVC1["Service: agent-1"]
+            TASK1["Task<br/>0.5 vCPU / 1–2GB"]
         end
-        subgraph SVC_G2["Service: gemini-2"]
-            TASK_G2["Task<br/>0.5 vCPU / 1GB"]
-        end
-        subgraph SVC_C1["Service: claude-1"]
-            TASK_C1["Task<br/>0.5 vCPU / 2GB"]
-        end
-        subgraph SVC_C2["Service: claude-2"]
-            TASK_C2["Task<br/>0.5 vCPU / 2GB"]
+        subgraph SVC2["Service: agent-2"]
+            TASK2["Task<br/>0.5 vCPU / 1–2GB"]
         end
     end
-
-    EFS["EFS File System"] --- TASK_G1 & TASK_G2 & TASK_C1 & TASK_C2
+    EFS["EFS"] --- TASK1 & TASK2
 ```
 
 ---
@@ -159,27 +133,23 @@ graph TB
 ```mermaid
 graph TB
     subgraph VPC["VPC"]
-        subgraph PUBLIC["Public Subnets"]
+        subgraph PUBLIC["Public Subnet"]
             NAT["NAT Gateway"]
         end
         subgraph PRIVATE["Private Subnets (multi-AZ)"]
-            TASK1["Fargate Task 1"]
-            TASK2["Fargate Task 2"]
-            TASK3["Fargate Task 3"]
-            TASK4["Fargate Task 4"]
+            TASK1["Agent-1"]
+            TASK2["Agent-2"]
         end
         EFS["EFS Mount Targets"]
     end
 
-    TASK1 & TASK2 & TASK3 & TASK4 -->|"outbound 443"| NAT
-    NAT --> INTERNET["Internet<br/>Discord · LLM APIs · GitHub"]
-    TASK1 & TASK2 & TASK3 & TASK4 --- EFS
+    TASK1 & TASK2 -->|"outbound 443"| NAT --> INTERNET["Internet<br/>Discord · LLM APIs · GitHub"]
+    TASK1 & TASK2 --- EFS
 ```
 
-- **No inbound ports** — agents connect outbound to Discord WebSocket
-- **Private subnets** — tasks not directly internet-accessible
-- **NAT Gateway** — provides outbound internet access
-- **EFS** — mounted in same AZs as Fargate tasks
+- No inbound ports — agents connect outbound to Discord WebSocket
+- Private subnets — not directly internet-accessible
+- NAT Gateway — outbound internet access
 
 ---
 
@@ -188,15 +158,11 @@ graph TB
 ```mermaid
 graph LR
     SSM["SSM Parameter Store"]
-    SSM -->|"/openab/discord/bot-token-gemini1"| G1["Gemini-1"]
-    SSM -->|"/openab/discord/bot-token-gemini2"| G2["Gemini-2"]
-    SSM -->|"/openab/discord/bot-token-claude1"| C1["Claude-1"]
-    SSM -->|"/openab/discord/bot-token-claude2"| C2["Claude-2"]
-    SSM -->|"/openab/api/gemini-key"| G1 & G2
-    SSM -->|"/openab/api/anthropic-key"| C1 & C2
+    SSM -->|"/openab/discord/bot-token-1"| A1["Agent-1"]
+    SSM -->|"/openab/discord/bot-token-2"| A2["Agent-2"]
+    SSM -->|"/openab/api/llm-key"| A1 & A2
+    SSM -->|"/openab/github/pat"| A1 & A2
 ```
-
-Secrets stored in SSM Parameter Store (SecureString), injected into task definitions as environment variables. No `.env` files on disk.
 
 ---
 
@@ -204,38 +170,34 @@ Secrets stored in SSM Parameter Store (SecureString), injected into task definit
 
 ```json
 {
-  "family": "openab-gemini",
+  "family": "openab-agent",
   "cpu": "512",
   "memory": "1024",
   "networkMode": "awsvpc",
   "containerDefinitions": [{
-    "name": "openab-gemini",
+    "name": "openab",
     "image": "<account>.dkr.ecr.<region>.amazonaws.com/openab-gemini:latest",
-    "essential": true,
     "command": ["openab", "run", "-c", "/etc/openab/config.toml"],
     "secrets": [
-      {"name": "DISCORD_BOT_TOKEN", "valueFrom": "/openab/discord/bot-token-gemini1"},
+      {"name": "DISCORD_BOT_TOKEN", "valueFrom": "/openab/discord/bot-token-1"},
       {"name": "GEMINI_API_KEY", "valueFrom": "/openab/api/gemini-key"},
       {"name": "GH_TOKEN", "valueFrom": "/openab/github/pat"}
     ],
-    "mountPoints": [{
-      "sourceVolume": "agent-home",
-      "containerPath": "/home/node"
-    }],
+    "mountPoints": [{"sourceVolume": "home", "containerPath": "/home/node"}],
     "logConfiguration": {
       "logDriver": "awslogs",
       "options": {
-        "awslogs-group": "/ecs/openab-gemini-1",
+        "awslogs-group": "/ecs/openab-agent-1",
         "awslogs-region": "<region>",
         "awslogs-stream-prefix": "ecs"
       }
     }
   }],
   "volumes": [{
-    "name": "agent-home",
+    "name": "home",
     "efsVolumeConfiguration": {
       "fileSystemId": "fs-xxxxxxxx",
-      "rootDirectory": "/gemini1"
+      "rootDirectory": "/agent1"
     }
   }]
 }
@@ -243,22 +205,7 @@ Secrets stored in SSM Parameter Store (SecureString), injected into task definit
 
 ---
 
-## Cost Estimate (4 agents)
-
-| Component | Monthly Cost |
-|-----------|-------------|
-| Fargate (4 tasks × 0.5 vCPU × 1–2GB, 24/7) | ~$40–60 |
-| EFS (5GB, infrequent access) | ~$1 |
-| NAT Gateway (outbound traffic) | ~$5–10 |
-| Lambda (Admin, <1000 invocations) | ~$0 |
-| SSM Parameter Store | ~$0 |
-| ECR (image storage) | ~$1 |
-| CloudWatch Logs | ~$2 |
-| **Total** | **~$50–75/month** |
-
----
-
-## Admin Lambda: Operations Flow
+## Operations Flow
 
 ```mermaid
 sequenceDiagram
@@ -268,78 +215,85 @@ sequenceDiagram
     participant ECS as ECS API
     participant CW as CloudWatch
 
-    Note over Lambda: Scale-out (on demand)
-    Human->>Discord: /admin start gemini-1
-    Discord->>Lambda: Slash command webhook
-    Lambda->>ECS: update-service(gemini-1, desired=1)
-    Lambda->>Discord: "✅ gemini-1 starting up (~30s)"
+    Note over Lambda: Scale-out
+    Human->>Discord: /admin start agent-1
+    Discord->>Lambda: Slash command
+    Lambda->>ECS: update-service(agent-1, desired=1)
+    Lambda->>Discord: "✅ agent-1 starting (~30s)"
 
-    Note over Lambda: Scale-in (scheduled)
-    Lambda->>ECS: describe-services (all workers)
-    Lambda->>CW: get-metric (active sessions)
-    Lambda->>Lambda: gemini-2 idle > 30 min
-    Lambda->>ECS: update-service(gemini-2, desired=0)
-    Lambda->>Discord: "💤 gemini-2 scaled to 0 (idle)"
+    Note over Lambda: Scale-in (automated)
+    Lambda->>CW: check active sessions
+    Lambda->>Lambda: agent-2 idle > 30 min
+    Lambda->>ECS: update-service(agent-2, desired=0)
+    Lambda->>Discord: "💤 agent-2 stopped (idle)"
 
-    Note over Lambda: Diagnostics (on demand)
-    Human->>Discord: /admin diagnose claude-1
-    Discord->>Lambda: Slash command webhook
-    Lambda->>ECS: describe-tasks(claude-1)
-    Lambda->>CW: get-log-events(claude-1, last 50 lines)
-    Lambda->>Discord: "claude-1: RUNNING, 2 sessions, last error: none"
+    Note over Lambda: Diagnostics
+    Human->>Discord: /admin diagnose agent-1
+    Discord->>Lambda: Slash command
+    Lambda->>ECS: describe-tasks(agent-1)
+    Lambda->>CW: get-log-events(last 50 lines)
+    Lambda->>Discord: "agent-1: RUNNING, 2 sessions, no errors"
 ```
 
 ---
 
 ## Scaling Model
 
-The Admin Lambda controls worker lifecycle via ECS `update-service`:
+| State | Desired Count | Cost | Response Time |
+|-------|--------------|------|---------------|
+| **Running** | 1 | Fargate charges | Instant |
+| **Stopped** | 0 | $0 | ~30s cold start |
 
-| State | Desired Count | Cost | Latency |
-|-------|--------------|------|---------|
-| **Running** (active) | 1 | Fargate charges apply | Instant response |
-| **Stopped** (idle) | 0 | $0 | ~30s cold start on next request |
+**Commands:**
 
-**Admin commands (via Discord slash commands or EventBridge):**
-
-| Command | Action |
+| Command | Effect |
 |---------|--------|
-| `/admin start gemini-1` | `desired-count = 1` |
-| `/admin stop gemini-2` | `desired-count = 0` |
-| `/admin stop-all` | All services → `desired-count = 0` |
-| `/admin start-all` | All services → `desired-count = 1` |
-| `/admin status` | List all services + running/stopped state |
-| `/admin diagnose claude-1` | Fetch task status + recent logs |
+| `/admin start agent-1` | desired-count = 1 |
+| `/admin stop agent-2` | desired-count = 0 |
+| `/admin stop-all` | All → 0 |
+| `/admin start-all` | All → 1 |
+| `/admin status` | Show running/stopped state |
+| `/admin diagnose agent-1` | Task status + recent logs |
 
-**Automated scale-in (EventBridge → Lambda, every 5 min):**
-- Check each worker's active session count (via CloudWatch or OpenAB metrics)
-- If idle > configurable threshold (e.g., 30 min) → set desired-count = 0
-- Saves cost during off-hours without manual intervention
+**Auto scale-in:** EventBridge → Lambda every 5 min. If idle > 30 min → stop.
 
 ---
 
-## vs EKS: When to Use This
+## Cost Estimate (2 agents)
 
-| Choose ECS Fargate + Lambda when... | Choose EKS when... |
-|---|---|
-| Team doesn't know Kubernetes | Team already uses K8s |
-| Want zero server management | Need custom scheduling/operators |
-| 2–6 agents | 10+ agents |
-| Cost-sensitive | Need advanced networking (service mesh) |
-| Simple scaling (per-service) | Complex multi-tenant isolation |
+| Component | Monthly Cost |
+|-----------|-------------|
+| Fargate (2 tasks × 0.5 vCPU × 1GB, 24/7) | ~$15–25 |
+| EFS (2GB) | ~$0.50 |
+| NAT Gateway | ~$5 |
+| Lambda (<1000 invocations) | ~$0 |
+| SSM / ECR / CloudWatch | ~$2 |
+| **Total** | **~$25–35/month** |
+
+With auto scale-in (agents stopped at night): **~$15–20/month**.
+
+---
+
+## Agent Flexibility
+
+Each ECS service independently chooses its agent CLI:
+
+| Service | Image | Agent CLI | Use Case |
+|---------|-------|-----------|----------|
+| agent-1 | `openab` | kiro-cli | AWS-focused tasks |
+| agent-1 | `openab-gemini` | gemini | General coding |
+| agent-1 | `openab-claude` | claude-code | Complex reasoning |
+
+Mix and match — just change the image in the task definition.
 
 ---
 
 ## Migration Path
 
 ```
-EC2 Docker Compose (POC)
-        ↓ ready for production
-ECS Fargate + Lambda (Serverless)
-        ↓ outgrow Fargate limits
+EC2 Docker Compose (POC)     →  same images, move .env to SSM, volumes to EFS
+        ↓
+ECS Fargate + Lambda         →  task definitions become pod specs
+        ↓
 EKS (Full Kubernetes)
 ```
-
-The same Docker images work across all three. The main changes are:
-- **EC2 → ECS**: Move `.env` to SSM, Docker volumes to EFS, compose to task definitions
-- **ECS → EKS**: Task definitions become pod specs, EFS stays, add Helm chart
