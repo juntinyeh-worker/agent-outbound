@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "planner": {
+      "url": "http://planner:8080/mcp"
+    },
+    "developer": {
+      "url": "http://developer:8080/mcp"
+    },
+    "reviewer": {
+      "url": "http://reviewer:8080/mcp"
+    }
+  }
+}

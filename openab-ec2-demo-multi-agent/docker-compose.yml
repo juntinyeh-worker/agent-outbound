@@ -1,0 +1,72 @@
+# Single Bot + Router + Backend Agents (Docker Compose)
+services:
+  # Router — holds the bot token, receives all Discord messages
+  router:
+    image: openab-gemini:latest
+    container_name: openab-router
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      - GEMINI_API_KEY=${ROUTER_API_KEY}
+      - GH_TOKEN=${GH_TOKEN:-}
+    volumes:
+      - router-home:/home/node
+      - ./config/.rendered/router.toml:/etc/openab/config.toml:ro
+      - ./config/.rendered/mcp-router.json:/home/node/.gemini/settings.json:ro
+    depends_on:
+      - planner
+      - developer
+      - reviewer
+    healthcheck:
+      test: ["CMD", "pgrep", "-x", "openab"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  # Backend agent: Planner (no Discord — headless MCP server)
+  planner:
+    image: openab-gemini:latest
+    container_name: openab-planner
+    restart: unless-stopped
+    environment:
+      - GEMINI_API_KEY=${PLANNER_API_KEY}
+    volumes:
+      - planner-home:/home/node
+      - ./prompts/planner.md:/home/node/AGENTS.md:ro
+    command: ["gemini", "--acp", "--mcp-server", "--port", "8080"]
+    expose:
+      - "8080"
+
+  # Backend agent: Developer (no Discord — headless MCP server)
+  developer:
+    image: openab-claude:latest
+    container_name: openab-developer
+    restart: unless-stopped
+    environment:
+      - ANTHROPIC_API_KEY=${DEVELOPER_API_KEY}
+    volumes:
+      - developer-home:/home/node
+      - ./prompts/developer.md:/home/node/AGENTS.md:ro
+    command: ["claude-agent-acp", "--mcp-server", "--port", "8080"]
+    expose:
+      - "8080"
+
+  # Backend agent: Reviewer (no Discord — headless MCP server)
+  reviewer:
+    image: openab-gemini:latest
+    container_name: openab-reviewer
+    restart: unless-stopped
+    environment:
+      - GEMINI_API_KEY=${REVIEWER_API_KEY}
+    volumes:
+      - reviewer-home:/home/node
+      - ./prompts/reviewer.md:/home/node/AGENTS.md:ro
+    command: ["gemini", "--acp", "--mcp-server", "--port", "8080"]
+    expose:
+      - "8080"
+
+volumes:
+  router-home:
+  planner-home:
+  developer-home:
+  reviewer-home:
