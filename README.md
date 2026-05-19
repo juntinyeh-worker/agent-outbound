@@ -26,6 +26,10 @@ curl -fsSL https://raw.githubusercontent.com/juntinyeh-worker/agent-outbound/mai
 - Optional GitHub + Atlassian (Jira/Confluence) integration via MCP
 - 4GB swap setup included
 
+### [openab-single-bot-multi-agent.md](./openab-single-bot-multi-agent.md)
+
+Architecture patterns for multi-agent collaboration: Pipeline mode, Subagent spawning, and Shared channel @mentions.
+
 ### [openab-cluster-architecture.md](./openab-cluster-architecture.md)
 
 Architecture overview of the OpenAB EKS cluster deployment (production).
