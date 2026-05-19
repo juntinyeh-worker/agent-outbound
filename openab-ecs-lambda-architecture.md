@@ -29,9 +29,7 @@ graph TB
 
     subgraph AWS["AWS"]
         subgraph ADMIN["Control Plane"]
-            APIGW["API Gateway<br/>(slash commands)"]
-            LAMBDA["Lambda: Admin<br/>Scale in/out · Diagnostics"]
-            EVENTBRIDGE["EventBridge<br/>(scheduled health checks)"]
+            LAMBDA["Lambda: Admin Agent<br/>(OpenAB + Agent CLI)<br/>Natural language → ECS management"]
         end
 
         subgraph WORKERS["ECS Fargate Cluster"]
@@ -52,20 +50,20 @@ graph TB
         GITHUB["GitHub"]
     end
 
-    HUMAN -->|"@mention bot"| DISCORD
+    HUMAN -->|"@mention worker"| DISCORD
     DISCORD -->|"Bot Gateway (WSS)"| SVC1 & SVC2
 
-    HUMAN -->|"/admin command"| APIGW --> LAMBDA
-    EVENTBRIDGE -->|"schedule"| LAMBDA
+    HUMAN -->|"@mention admin<br/>(natural language)"| DISCORD
+    DISCORD -->|"invoke"| LAMBDA
     LAMBDA -->|"update-service<br/>desired-count 0↔1"| WORKERS
     LAMBDA -->|"describe-tasks<br/>get-log-events"| WORKERS
-    LAMBDA -->|"post status"| DISCORD
+    LAMBDA -->|"reply"| DISCORD
 
     SVC1 & SVC2 -->|"API"| LLM
     SVC1 & SVC2 -->|"git"| GITHUB
     SVC1 & SVC2 --- EFS
     SVC1 & SVC2 -->|"read secrets"| SSM
-    ECR -.->|"pull"| WORKERS
+    ECR -.->|"pull"| WORKERS & LAMBDA
 ```
 
 ---
@@ -74,32 +72,36 @@ graph TB
 
 ### Admin (Lambda) — Control Plane
 
-The Admin Lambda is **not** a conversational agent. It manages the worker fleet.
+The Admin Lambda runs **the same OpenAB + Agent container image** as the workers. It's a full conversational agent that you talk to in natural language via Discord — it just happens to run on Lambda instead of Fargate.
+
+You tell it things like:
+- "stop agent-2, it's not needed right now"
+- "start agent-1 back up"
+- "what's the status of all agents?"
+- "agent-1 seems stuck, check its logs"
+
+The agent interprets your intent and calls the ECS API accordingly.
 
 | Aspect | Detail |
 |--------|--------|
-| **Runtime** | Lambda (Python or Node.js) |
-| **Trigger** | EventBridge (scheduled) + API Gateway (Discord slash commands) |
-| **Responsibilities** | Scale workers in/out, health checks, diagnostics |
-| **Cost** | ~$0/month (pay per invocation) |
+| **Runtime** | Lambda container image (same `openab` + agent CLI) |
+| **Trigger** | Discord message (via bot gateway / webhook) |
+| **How it works** | Natural language → Agent reasons → calls ECS/CloudWatch APIs as tools |
+| **Cost** | ~$0/month (runs only when you message it) |
 
 ```mermaid
 graph LR
-    EVENTBRIDGE["EventBridge<br/>(every 5 min)"] --> LAMBDA["Lambda: Admin"]
-    SLASH["/admin command"] --> APIGW["API Gateway"] --> LAMBDA
-    LAMBDA -->|"desired-count 0↔1"| ECS["ECS API"]
-    LAMBDA -->|"logs / metrics"| CW["CloudWatch"]
-    LAMBDA -->|"post status"| DISCORD["Discord"]
+    HUMAN["👤 Human"] -->|"natural language<br/>via Discord"| ADMIN["Lambda: Admin Agent<br/>(OpenAB + Kiro/Gemini/Claude)"]
+    ADMIN -->|"update-service<br/>desired-count 0↔1"| ECS["ECS API"]
+    ADMIN -->|"describe-tasks<br/>get-log-events"| CW["CloudWatch"]
+    ADMIN -->|"reply in<br/>natural language"| HUMAN
 ```
 
-**What it does:**
-
-| Action | Trigger | API Call |
-|--------|---------|---------|
-| Start a worker | `/admin start agent-1` | `update-service --desired-count 1` |
-| Stop idle worker | Scheduled (idle > 30 min) | `update-service --desired-count 0` |
-| Diagnose | `/admin diagnose agent-1` | `describe-tasks` + `get-log-events` |
-| Health check | Scheduled (every 5 min) | `describe-services`, restart unhealthy |
+**Why Lambda for Admin:**
+- Admin conversations are short-lived (ask a question, get an answer, done)
+- No need to keep a Fargate task running 24/7 for occasional admin requests
+- Same agent image — no special code, just different IAM permissions
+- Cost: effectively $0 (Lambda container invocations are cheap)
 
 ### Workers (ECS Fargate) — Data Plane
 
@@ -211,51 +213,53 @@ graph LR
 sequenceDiagram
     participant Human
     participant Discord
-    participant Lambda as Lambda (Admin)
+    participant Admin as Lambda (Admin Agent)
     participant ECS as ECS API
     participant CW as CloudWatch
 
-    Note over Lambda: Scale-out
-    Human->>Discord: /admin start agent-1
-    Discord->>Lambda: Slash command
-    Lambda->>ECS: update-service(agent-1, desired=1)
-    Lambda->>Discord: "✅ agent-1 starting (~30s)"
+    Note over Admin: Scale-out
+    Human->>Discord: "@admin start agent-1 please"
+    Discord->>Admin: Message (natural language)
+    Admin->>Admin: Reason: user wants agent-1 running
+    Admin->>ECS: update-service(agent-1, desired=1)
+    Admin->>Discord: "Done — agent-1 is starting up, should be ready in ~30s"
 
-    Note over Lambda: Scale-in (automated)
-    Lambda->>CW: check active sessions
-    Lambda->>Lambda: agent-2 idle > 30 min
-    Lambda->>ECS: update-service(agent-2, desired=0)
-    Lambda->>Discord: "💤 agent-2 stopped (idle)"
+    Note over Admin: Scale-in
+    Human->>Discord: "@admin stop agent-2, we don't need it tonight"
+    Discord->>Admin: Message
+    Admin->>ECS: update-service(agent-2, desired=0)
+    Admin->>Discord: "Stopped agent-2. It won't incur charges until restarted."
 
-    Note over Lambda: Diagnostics
-    Human->>Discord: /admin diagnose agent-1
-    Discord->>Lambda: Slash command
-    Lambda->>ECS: describe-tasks(agent-1)
-    Lambda->>CW: get-log-events(last 50 lines)
-    Lambda->>Discord: "agent-1: RUNNING, 2 sessions, no errors"
+    Note over Admin: Diagnostics
+    Human->>Discord: "@admin agent-1 seems stuck, can you check?"
+    Discord->>Admin: Message
+    Admin->>ECS: describe-tasks(agent-1)
+    Admin->>CW: get-log-events(agent-1, last 50 lines)
+    Admin->>Discord: "agent-1 is RUNNING with 2 active sessions. Last log shows a rate limit from Gemini API — it should recover automatically."
 ```
 
 ---
 
 ## Scaling Model
 
+The Admin agent controls worker lifecycle via natural language → ECS API:
+
 | State | Desired Count | Cost | Response Time |
 |-------|--------------|------|---------------|
 | **Running** | 1 | Fargate charges | Instant |
 | **Stopped** | 0 | $0 | ~30s cold start |
 
-**Commands:**
+**Example conversations with Admin:**
 
-| Command | Effect |
-|---------|--------|
-| `/admin start agent-1` | desired-count = 1 |
-| `/admin stop agent-2` | desired-count = 0 |
-| `/admin stop-all` | All → 0 |
-| `/admin start-all` | All → 1 |
-| `/admin status` | Show running/stopped state |
-| `/admin diagnose agent-1` | Task status + recent logs |
+| You say | Admin does |
+|---------|-----------|
+| "start agent-1" | `update-service --desired-count 1` |
+| "shut down everything for the night" | All services → `desired-count 0` |
+| "what's running right now?" | `describe-services` → reports status |
+| "agent-2 isn't responding, check it" | `describe-tasks` + `get-log-events` → diagnoses |
+| "restart agent-1" | `desired-count 0`, wait, `desired-count 1` |
 
-**Auto scale-in:** EventBridge → Lambda every 5 min. If idle > 30 min → stop.
+**Optional: automated scale-in** — add EventBridge trigger (every 5 min) to invoke the Admin agent with a system message like "check if any workers are idle and stop them if so."
 
 ---
 
