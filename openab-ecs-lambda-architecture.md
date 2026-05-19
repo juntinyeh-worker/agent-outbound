@@ -30,13 +30,13 @@ graph TB
     HUMAN["👤 Human / Admin<br/>Discord"]
 
     subgraph AWS["AWS"]
-        subgraph ADMIN["Admin Layer"]
-            APIGW["API Gateway<br/>(Discord Interactions Endpoint)"]
-            LAMBDA["Lambda: AdminAgent<br/>Task dispatch · Cluster management"]
-            SQS["SQS Queues<br/>(per-worker task routing)"]
+        subgraph ADMIN["Admin Layer (Control Plane)"]
+            APIGW["API Gateway<br/>(slash commands)"]
+            LAMBDA["Lambda: Admin<br/>Scale in/out · Diagnostics"]
+            EVENTBRIDGE["EventBridge<br/>(scheduled health checks)"]
         end
 
-        subgraph WORKERS["ECS Fargate Cluster"]
+        subgraph WORKERS["ECS Fargate Cluster (Data Plane)"]
             SVC1["Service: Gemini-1 🟦<br/>Fargate Task"]
             SVC2["Service: Gemini-2 🟦<br/>Fargate Task"]
             SVC3["Service: Claude-1 🟣<br/>Fargate Task"]
@@ -57,20 +57,20 @@ graph TB
         end
     end
 
-    HUMAN -->|"@mention"| DISCORD
+    HUMAN -->|"@mention bot"| DISCORD
     DISCORD -->|"Bot Gateway (WSS)"| SVC1 & SVC2 & SVC3 & SVC4
-    DISCORD -->|"Interactions webhook"| APIGW --> LAMBDA
 
-    LAMBDA -->|"dispatch tasks"| SQS
-    SQS -->|"consume"| SVC1 & SVC2 & SVC3 & SVC4
-
-    LAMBDA -->|"manage services"| WORKERS
+    HUMAN -->|"/admin command"| APIGW --> LAMBDA
+    EVENTBRIDGE -->|"schedule"| LAMBDA
+    LAMBDA -->|"update-service<br/>desired-count 0↔1"| WORKERS
+    LAMBDA -->|"describe-tasks<br/>get-log-events"| WORKERS
+    LAMBDA -->|"post status"| DISCORD
 
     SVC1 & SVC2 -->|"API"| GEMINI_API
     SVC3 & SVC4 -->|"API"| ANTHROPIC_API
     SVC1 & SVC2 & SVC3 & SVC4 -->|"git"| GITHUB
     SVC1 & SVC2 & SVC3 & SVC4 --- EFS
-    LAMBDA & SVC1 & SVC2 & SVC3 & SVC4 -->|"read secrets"| SSM
+    SVC1 & SVC2 & SVC3 & SVC4 -->|"read secrets"| SSM
     ECR -.->|"pull"| WORKERS
 ```
 
@@ -80,29 +80,46 @@ graph TB
 
 ### Admin Agent (Lambda)
 
+The Admin Lambda is **not** a conversational agent — it's a control-plane function that manages the worker fleet.
+
 | Aspect | Detail |
 |--------|--------|
-| **Runtime** | Lambda (Node.js or custom runtime) |
-| **Trigger** | API Gateway (Discord Interactions endpoint) + EventBridge (scheduled) |
-| **Responsibilities** | Task dispatch, worker health checks, scaling decisions |
-| **State** | Stateless — reads/writes to DynamoDB or GitHub |
-| **Timeout** | 15 min max (sufficient for dispatch, not for long tasks) |
-| **Cost** | Near-zero when idle (pay per invocation) |
+| **Runtime** | Lambda (Python or Node.js) |
+| **Trigger** | EventBridge schedule + manual invocation (Discord slash command or CLI) |
+| **Responsibilities** | Scale workers in/out (desired count 0↔1), real-time diagnostics |
+| **State** | Stateless — reads ECS service status, CloudWatch metrics |
+| **Timeout** | 15 min max |
+| **Cost** | Near-zero (pay per invocation) |
+
+**What the Admin Lambda does:**
+
+| Action | When | ECS API Call |
+|--------|------|-------------|
+| **Scale out** (start worker) | Demand detected or manual trigger | `update-service --desired-count 1` |
+| **Scale in** (stop idle worker) | Worker idle for N minutes | `update-service --desired-count 0` |
+| **Diagnose** | On-demand (admin request) | `describe-tasks`, `get-log-events` |
+| **Health check** | Scheduled (every 5 min) | `describe-services`, restart unhealthy |
 
 ```mermaid
 graph LR
-    DISCORD["Discord<br/>Interactions Webhook"] --> APIGW["API Gateway"]
-    APIGW --> LAMBDA["Lambda: Admin"]
-    EVENTBRIDGE["EventBridge<br/>Schedule (health check)"] --> LAMBDA
-    LAMBDA --> SQS["SQS<br/>(task queues)"]
-    LAMBDA --> ECS["ECS API<br/>(scale/restart)"]
-    LAMBDA --> SSM["SSM<br/>(config)"]
+    EVENTBRIDGE["EventBridge<br/>Schedule (every 5 min)"] --> LAMBDA["Lambda: Admin"]
+    SLASH["Discord Slash Command<br/>/admin scale gemini-1 up"] --> APIGW["API Gateway"] --> LAMBDA
+    LAMBDA -->|"update-service<br/>desired-count 0 or 1"| ECS["ECS API"]
+    LAMBDA -->|"describe-tasks<br/>get-log-events"| CW["CloudWatch"]
+    LAMBDA -->|"post status"| DISCORD["Discord Channel"]
 ```
 
 **Why Lambda for Admin:**
-- Admin tasks are short-lived (dispatch a task, check health, scale a service)
-- No need to keep a process running 24/7 just for occasional admin commands
-- Cost: ~$0/month for typical admin usage (few hundred invocations)
+- Admin operations are infrequent and short-lived (set desired count, read logs)
+- No need to keep a process running 24/7 just to occasionally flip a switch
+- Workers handle their own Discord conversations — Admin doesn't route messages
+- Cost: ~$0/month (a few hundred invocations at most)
+
+**Scale-in/out logic (example):**
+```
+IF worker has no active sessions for 30 min → set desired-count = 0
+IF message arrives for a stopped worker → set desired-count = 1, reply "starting up..."
+```
 
 ### Worker Agents (ECS Fargate)
 
@@ -241,39 +258,63 @@ Secrets stored in SSM Parameter Store (SecureString), injected into task definit
 
 ---
 
-## Admin Lambda: Task Dispatch Flow
+## Admin Lambda: Operations Flow
 
 ```mermaid
 sequenceDiagram
     participant Human
     participant Discord
     participant Lambda as Lambda (Admin)
-    participant SQS
-    participant Worker as ECS Worker
+    participant ECS as ECS API
+    participant CW as CloudWatch
 
-    Human->>Discord: /assign task to gemini-1
-    Discord->>Lambda: Interaction webhook
-    Lambda->>Lambda: Parse command, select worker
-    Lambda->>SQS: Enqueue task message
-    Lambda->>Discord: "✅ Task dispatched to gemini-1"
-    Worker->>SQS: Poll queue
-    Worker->>Worker: Execute task
-    Worker->>Discord: Post result in thread
+    Note over Lambda: Scale-out (on demand)
+    Human->>Discord: /admin start gemini-1
+    Discord->>Lambda: Slash command webhook
+    Lambda->>ECS: update-service(gemini-1, desired=1)
+    Lambda->>Discord: "✅ gemini-1 starting up (~30s)"
+
+    Note over Lambda: Scale-in (scheduled)
+    Lambda->>ECS: describe-services (all workers)
+    Lambda->>CW: get-metric (active sessions)
+    Lambda->>Lambda: gemini-2 idle > 30 min
+    Lambda->>ECS: update-service(gemini-2, desired=0)
+    Lambda->>Discord: "💤 gemini-2 scaled to 0 (idle)"
+
+    Note over Lambda: Diagnostics (on demand)
+    Human->>Discord: /admin diagnose claude-1
+    Discord->>Lambda: Slash command webhook
+    Lambda->>ECS: describe-tasks(claude-1)
+    Lambda->>CW: get-log-events(claude-1, last 50 lines)
+    Lambda->>Discord: "claude-1: RUNNING, 2 sessions, last error: none"
 ```
 
 ---
 
 ## Scaling Model
 
-| Action | How |
-|--------|-----|
-| Add a worker | New ECS service + task definition |
-| Remove a worker | Set desired count = 0 |
-| Pause all workers | `aws ecs update-service --desired-count 0` |
-| Resume | `aws ecs update-service --desired-count 1` |
-| Scale a worker (more resources) | Update task definition CPU/memory |
+The Admin Lambda controls worker lifecycle via ECS `update-service`:
 
-The Admin Lambda can automate these via the ECS API — e.g., scale down workers at night, scale up on demand.
+| State | Desired Count | Cost | Latency |
+|-------|--------------|------|---------|
+| **Running** (active) | 1 | Fargate charges apply | Instant response |
+| **Stopped** (idle) | 0 | $0 | ~30s cold start on next request |
+
+**Admin commands (via Discord slash commands or EventBridge):**
+
+| Command | Action |
+|---------|--------|
+| `/admin start gemini-1` | `desired-count = 1` |
+| `/admin stop gemini-2` | `desired-count = 0` |
+| `/admin stop-all` | All services → `desired-count = 0` |
+| `/admin start-all` | All services → `desired-count = 1` |
+| `/admin status` | List all services + running/stopped state |
+| `/admin diagnose claude-1` | Fetch task status + recent logs |
+
+**Automated scale-in (EventBridge → Lambda, every 5 min):**
+- Check each worker's active session count (via CloudWatch or OpenAB metrics)
+- If idle > configurable threshold (e.g., 30 min) → set desired-count = 0
+- Saves cost during off-hours without manual intervention
 
 ---
 
