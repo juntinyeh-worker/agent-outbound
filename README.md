@@ -28,7 +28,11 @@ curl -fsSL https://raw.githubusercontent.com/juntinyeh-worker/agent-outbound/mai
 
 ### [openab-cluster-architecture.md](./openab-cluster-architecture.md)
 
-Architecture overview of the OpenAB EKS cluster deployment.
+Architecture overview of the OpenAB EKS cluster deployment (production).
+
+### [openab-ec2-architecture.md](./openab-ec2-architecture.md)
+
+Architecture overview of the Docker Compose single-EC2 deployment (POC/demo).
 
 ### [worker-agent-workflow.md](./worker-agent-workflow.md)
 
