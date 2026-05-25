@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>S3 Photo Album</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #1a1a2e; color: #eee; }
+
+/* Header */
+.header { display: flex; justify-content: space-between; align-items: center; padding: 12px 24px; background: #16213e; border-bottom: 1px solid #0f3460; }
+.header h1 { font-size: 18px; font-weight: 500; }
+.header .user { display: flex; align-items: center; gap: 12px; font-size: 14px; }
+.header .badge { background: #e94560; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; }
+.header .badge.viewer { background: #0f3460; }
+
+/* Breadcrumb */
+.breadcrumb { padding: 10px 24px; font-size: 13px; color: #888; border-bottom: 1px solid #0f3460; }
+.breadcrumb a { color: #4ea8de; text-decoration: none; }
+
+/* Grid */
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 16px; padding: 24px; }
+.card { background: #16213e; border-radius: 8px; overflow: hidden; cursor: pointer; transition: transform 0.15s, box-shadow 0.15s; }
+.card:hover { transform: translateY(-2px); box-shadow: 0 4px 20px rgba(233,69,96,0.2); }
+.card .thumb { width: 100%; aspect-ratio: 1; object-fit: cover; background: #0f3460; display: flex; align-items: center; justify-content: center; color: #4ea8de; font-size: 48px; }
+.card .info { padding: 8px 12px; }
+.card .info .name { font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.card .info .meta { font-size: 11px; color: #666; margin-top: 2px; }
+
+/* Lightbox */
+.lightbox { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.95); z-index: 100; flex-direction: column; }
+.lightbox.active { display: flex; }
+.lightbox .toolbar { display: flex; justify-content: space-between; align-items: center; padding: 12px 24px; background: #111; }
+.lightbox .toolbar .title { font-size: 14px; }
+.lightbox .toolbar .actions { display: flex; gap: 8px; }
+.lightbox .toolbar button { padding: 6px 14px; border: none; border-radius: 4px; cursor: pointer; font-size: 12px; font-weight: 500; }
+.btn-rotate { background: #0f3460; color: #4ea8de; }
+.btn-comment { background: #0f3460; color: #4ea8de; }
+.btn-purge { background: #3d0000; color: #e94560; }
+.btn-close { background: #333; color: #eee; }
+.lightbox .image-area { flex: 1; display: flex; align-items: center; justify-content: center; padding: 24px; }
+.lightbox .image-area img { max-width: 100%; max-height: 100%; object-fit: contain; border-radius: 4px; }
+.lightbox .comment-bar { padding: 12px 24px; background: #111; border-top: 1px solid #333; display: flex; gap: 12px; align-items: center; }
+.lightbox .comment-bar input { flex: 1; padding: 8px 12px; border-radius: 4px; border: 1px solid #333; background: #1a1a2e; color: #eee; font-size: 13px; }
+.lightbox .comment-bar button { padding: 8px 16px; background: #4ea8de; color: #fff; border: none; border-radius: 4px; cursor: pointer; font-size: 13px; }
+
+/* Folder */
+.card.folder .thumb { font-size: 56px; }
+
+/* Login overlay */
+.login-overlay { position: fixed; inset: 0; background: #1a1a2e; display: flex; align-items: center; justify-content: center; z-index: 200; }
+.login-box { background: #16213e; padding: 40px; border-radius: 12px; text-align: center; width: 320px; }
+.login-box h2 { margin-bottom: 24px; font-weight: 500; }
+.login-box input { width: 100%; padding: 10px 14px; margin-bottom: 12px; border-radius: 6px; border: 1px solid #0f3460; background: #1a1a2e; color: #eee; font-size: 14px; }
+.login-box button { width: 100%; padding: 10px; background: #e94560; color: #fff; border: none; border-radius: 6px; font-size: 14px; cursor: pointer; font-weight: 500; }
+.login-box .note { margin-top: 16px; font-size: 11px; color: #666; }
+</style>
+</head>
+<body>
+
+<!-- Login Screen -->
+<div class="login-overlay" id="loginOverlay">
+  <div class="login-box">
+    <h2>📷 S3 Photo Album</h2>
+    <input type="email" placeholder="Email" value="admin@example.com">
+    <input type="password" placeholder="Password" value="••••••••">
+    <button onclick="login()">Sign In</button>
+    <div class="note">Authenticated via Amazon Cognito</div>
+  </div>
+</div>
+
+<!-- Main App -->
+<div class="header">
+  <h1>📷 S3 Photo Album</h1>
+  <div class="user">
+    <span class="badge">Editor</span>
+    <span>admin@example.com</span>
+    <button style="background:#333;color:#eee;border:none;padding:4px 10px;border-radius:4px;cursor:pointer;font-size:12px">Logout</button>
+  </div>
+</div>
+
+<div class="breadcrumb">
+  <a href="#">my-photos-bucket</a> / <a href="#">vacation-2024</a>
+</div>
+
+<div class="grid">
+  <div class="card folder" onclick="openLightbox()">
+    <div class="thumb">📁</div>
+    <div class="info"><div class="name">family/</div><div class="meta">12 items</div></div>
+  </div>
+  <div class="card" onclick="openLightbox()">
+    <div class="thumb">🏖️</div>
+    <div class="info"><div class="name">beach-sunset.jpg</div><div class="meta">2.4 MB</div></div>
+  </div>
+  <div class="card" onclick="openLightbox()">
+    <div class="thumb">🌄</div>
+    <div class="info"><div class="name">mountain-view.jpg</div><div class="meta">3.1 MB</div></div>
+  </div>
+  <div class="card" onclick="openLightbox()">
+    <div class="thumb">🌊</div>
+    <div class="info"><div class="name">ocean-waves.jpg</div><div class="meta">1.8 MB</div></div>
+  </div>
+  <div class="card" onclick="openLightbox()">
+    <div class="thumb">🌅</div>
+    <div class="info"><div class="name">golden-hour.jpg</div><div class="meta">2.7 MB</div></div>
+  </div>
+  <div class="card" onclick="openLightbox()">
+    <div class="thumb">🏝️</div>
+    <div class="info"><div class="name">island-aerial.jpg</div><div class="meta">4.2 MB</div></div>
+  </div>
+  <div class="card" onclick="openLightbox()">
+    <div class="thumb">🐚</div>
+    <div class="info"><div class="name">shells-closeup.jpg</div><div class="meta">1.2 MB</div></div>
+  </div>
+  <div class="card" onclick="openLightbox()">
+    <div class="thumb">🌴</div>
+    <div class="info"><div class="name">palm-trees.jpg</div><div class="meta">2.0 MB</div></div>
+  </div>
+</div>
+
+<!-- Lightbox -->
+<div class="lightbox" id="lightbox">
+  <div class="toolbar">
+    <div class="title">beach-sunset.jpg</div>
+    <div class="actions">
+      <button class="btn-rotate">↻ Rotate</button>
+      <button class="btn-comment">💬 Comment</button>
+      <button class="btn-purge" onclick="confirmPurge()">🗑 Purge</button>
+      <button class="btn-close" onclick="closeLightbox()">✕ Close</button>
+    </div>
+  </div>
+  <div class="image-area">
+    <img src="https://images.unsplash.com/photo-1507525428034-b723cf961d3e?w=1200&q=80" alt="Beach sunset">
+  </div>
+  <div class="comment-bar">
+    <input type="text" placeholder="Add a comment..." value="Beautiful sunset from our trip!">
+    <button>Save</button>
+  </div>
+</div>
+
+<script>
+function login() {
+  document.getElementById('loginOverlay').style.display = 'none';
+}
+function openLightbox() {
+  document.getElementById('lightbox').classList.add('active');
+}
+function closeLightbox() {
+  document.getElementById('lightbox').classList.remove('active');
+}
+function confirmPurge() {
+  if (confirm('Are you sure you want to permanently delete this photo? This cannot be undone.')) {
+    alert('Photo deleted.');
+    closeLightbox();
+  }
+}
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeLightbox(); });
+</script>
+</body>
+</html>
