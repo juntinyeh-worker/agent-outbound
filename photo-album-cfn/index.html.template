@@ -29,8 +29,9 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; b
 .lightbox .toolbar button { padding: 6px 14px; border: none; border-radius: 4px; cursor: pointer; font-size: 12px; font-weight: 500; }
 .btn-purge { background: #3d0000; color: #e94560; }
 .btn-close { background: #333; color: #eee; }
-.lightbox .image-area { flex: 1; display: flex; align-items: center; justify-content: center; padding: 24px; }
-.lightbox .image-area img { max-width: 100%; max-height: 100%; object-fit: contain; border-radius: 4px; }
+.lightbox .image-area { flex: 1; display: flex; align-items: center; justify-content: center; padding: 24px; overflow: auto; position: relative; cursor: grab; }
+.lightbox .image-area.dragging { cursor: grabbing; }
+.lightbox .image-area img { max-width: none; max-height: none; object-fit: contain; border-radius: 4px; transition: transform 0.1s; transform-origin: center center; }
 .login-overlay { position: fixed; inset: 0; background: #1a1a2e; display: flex; align-items: center; justify-content: center; z-index: 200; }
 .login-box { background: #16213e; padding: 40px; border-radius: 12px; text-align: center; width: 320px; }
 .login-box h2 { margin-bottom: 24px; font-weight: 500; }
@@ -95,6 +96,9 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; b
   <div class="toolbar">
     <div class="title" id="lightboxTitle"></div>
     <div style="display:flex;gap:8px">
+      <button style="padding:6px 14px;border:none;border-radius:4px;cursor:pointer;font-size:12px;background:#0f3460;color:#4ea8de" onclick="zoomImg(-1)">−</button>
+      <button style="padding:6px 14px;border:none;border-radius:4px;cursor:pointer;font-size:12px;background:#0f3460;color:#4ea8de" onclick="zoomImg(1)">+</button>
+      <button style="padding:6px 14px;border:none;border-radius:4px;cursor:pointer;font-size:12px;background:#0f3460;color:#4ea8de" onclick="zoomFit()">Fit</button>
       <button style="padding:6px 14px;border:none;border-radius:4px;cursor:pointer;font-size:12px;background:#0f3460;color:#4ea8de" onclick="rotatePhoto('ccw')">↺</button>
       <button style="padding:6px 14px;border:none;border-radius:4px;cursor:pointer;font-size:12px;background:#0f3460;color:#4ea8de" onclick="rotatePhoto('cw')">↻</button>
       <button class="btn-purge" id="purgeBtn" onclick="purgePhoto()">🗑 Purge</button>
@@ -299,6 +303,11 @@ function openPhoto(key) {
   document.getElementById('lightboxTitle').textContent = name;
   document.getElementById('lightbox').classList.add('active');
   document.getElementById('commentInput').value = '';
+  zoomLevel = 1;
+  const img = document.getElementById('lightboxImg');
+  img.style.transform = 'scale(1)';
+  img.style.maxWidth = '100%';
+  img.style.maxHeight = '100%';
   loadComment(key);
   const s3 = new AWS.S3();
   s3.getSignedUrl('getObject', { Bucket: currentBucket, Key: key, Expires: 300 }, (err, url) => {
@@ -309,7 +318,76 @@ function openPhoto(key) {
 function closeLightbox() {
   document.getElementById('lightbox').classList.remove('active');
   document.getElementById('lightboxImg').src = '';
+  zoomLevel = 1;
 }
+
+// --- Zoom & Pan ---
+let zoomLevel = 1;
+const ZOOM_STEP = 0.3;
+const ZOOM_MIN = 0.5;
+const ZOOM_MAX = 5;
+
+function zoomImg(dir) {
+  zoomLevel = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, zoomLevel + dir * ZOOM_STEP));
+  applyZoom();
+}
+
+function zoomFit() {
+  zoomLevel = 1;
+  const img = document.getElementById('lightboxImg');
+  img.style.transform = `scale(1)`;
+  img.style.maxWidth = '100%';
+  img.style.maxHeight = '100%';
+}
+
+function applyZoom() {
+  const img = document.getElementById('lightboxImg');
+  img.style.maxWidth = 'none';
+  img.style.maxHeight = 'none';
+  img.style.transform = `scale(${zoomLevel})`;
+}
+
+// Mouse wheel zoom
+document.addEventListener('wheel', (e) => {
+  if (!document.getElementById('lightbox').classList.contains('active')) return;
+  if (e.target.closest('.comment-bar') || e.target.closest('.toolbar')) return;
+  e.preventDefault();
+  zoomImg(e.deltaY < 0 ? 1 : -1);
+}, { passive: false });
+
+// Drag to pan
+(function() {
+  let isDragging = false, startX, startY, scrollLeft, scrollTop;
+  const getArea = () => document.querySelector('.lightbox .image-area');
+
+  document.addEventListener('mousedown', (e) => {
+    const area = getArea();
+    if (!area || !area.contains(e.target)) return;
+    if (e.target.tagName === 'BUTTON') return;
+    isDragging = true;
+    area.classList.add('dragging');
+    startX = e.pageX - area.offsetLeft;
+    startY = e.pageY - area.offsetTop;
+    scrollLeft = area.scrollLeft;
+    scrollTop = area.scrollTop;
+  });
+
+  document.addEventListener('mousemove', (e) => {
+    if (!isDragging) return;
+    e.preventDefault();
+    const area = getArea();
+    const x = e.pageX - area.offsetLeft;
+    const y = e.pageY - area.offsetTop;
+    area.scrollLeft = scrollLeft - (x - startX);
+    area.scrollTop = scrollTop - (y - startY);
+  });
+
+  document.addEventListener('mouseup', () => {
+    isDragging = false;
+    const area = getArea();
+    if (area) area.classList.remove('dragging');
+  });
+})();
 
 function purgePhoto() {
   if (!confirm('Permanently delete this photo?')) return;
