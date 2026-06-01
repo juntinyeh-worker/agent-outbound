@@ -1,5 +1,6 @@
 #!/bin/bash
 set -e
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 echo "========================================="
 echo " Photo Rotate — Deploy"
@@ -25,7 +26,7 @@ echo ""
 echo "→ [2/3] Deploying CloudFormation stack..."
 aws cloudformation deploy \
   --stack-name "$STACK_NAME" \
-  --template-file "$(dirname "$0")/rotate-cfn.yaml" \
+  --template-file "$SCRIPT_DIR/rotate-cfn.yaml" \
   --parameter-overrides PhotoBucketName="$PHOTO_BUCKET" \
   --capabilities CAPABILITY_IAM \
   --region "$REGION"
@@ -39,7 +40,7 @@ echo "→ [3/3] Uploading layer and code..."
 aws s3 cp "$LAYER_DIR/rotate-layer.zip" "s3://$LAYER_BUCKET/rotate-layer.zip" --region "$REGION"
 
 CODE_DIR=$(mktemp -d)
-cp "$(dirname "$0")/lambda_function.py" "$CODE_DIR/"
+cp "$SCRIPT_DIR/lambda_function.py" "$CODE_DIR/"
 cd "$CODE_DIR" && zip -r9 code.zip lambda_function.py > /dev/null
 
 aws lambda update-function-code \

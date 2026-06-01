@@ -1,5 +1,6 @@
 #!/bin/bash
 set -e
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 echo "========================================="
 echo " Burst Detector — Deploy"
@@ -38,7 +39,7 @@ echo "→ [2/4] Deploying CloudFormation stack..."
 
 aws cloudformation deploy \
   --stack-name "$STACK_NAME" \
-  --template-file "$(dirname "$0")/burst-detector-cfn.yaml" \
+  --template-file "$SCRIPT_DIR/burst-detector-cfn.yaml" \
   --parameter-overrides PhotoBucketName="$PHOTO_BUCKET" \
   --capabilities CAPABILITY_IAM \
   --region "$REGION"
@@ -55,7 +56,7 @@ aws s3 cp "$LAYER_ZIP" "s3://$LAYER_BUCKET/burst-detector-layer.zip" --region "$
 
 # Package and upload Lambda code
 CODE_DIR=$(mktemp -d)
-cp "$(dirname "$0")/lambda_function.py" "$CODE_DIR/"
+cp "$SCRIPT_DIR/lambda_function.py" "$CODE_DIR/"
 cd "$CODE_DIR"
 zip -r9 code.zip lambda_function.py > /dev/null
 
