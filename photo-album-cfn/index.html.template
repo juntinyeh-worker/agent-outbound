@@ -1,0 +1,467 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>S3 Photo Album</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #1a1a2e; color: #eee; min-height: 100vh; }
+.header { display: flex; justify-content: space-between; align-items: center; padding: 12px 24px; background: #16213e; border-bottom: 1px solid #0f3460; }
+.header h1 { font-size: 18px; font-weight: 500; }
+.header .user { display: flex; align-items: center; gap: 12px; font-size: 14px; }
+.header .badge { background: #e94560; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; }
+.header .badge.viewer { background: #0f3460; }
+.breadcrumb { padding: 10px 24px; font-size: 13px; color: #888; border-bottom: 1px solid #0f3460; }
+.breadcrumb a { color: #4ea8de; text-decoration: none; cursor: pointer; }
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 16px; padding: 24px; }
+.card { background: #16213e; border-radius: 8px; overflow: hidden; cursor: pointer; transition: transform 0.15s; }
+.card:hover { transform: translateY(-2px); box-shadow: 0 4px 20px rgba(233,69,96,0.2); }
+.card .thumb { width: 100%; aspect-ratio: 1; object-fit: cover; background: #0f3460; display: flex; align-items: center; justify-content: center; font-size: 48px; }
+.card .thumb img { width: 100%; height: 100%; object-fit: cover; }
+.card .info { padding: 8px 12px; }
+.card .info .name { font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.card .info .meta { font-size: 11px; color: #666; margin-top: 2px; }
+.lightbox { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.95); z-index: 100; flex-direction: column; }
+.lightbox.active { display: flex; }
+.lightbox .toolbar { display: flex; justify-content: space-between; align-items: center; padding: 12px 24px; background: #111; }
+.lightbox .toolbar .title { font-size: 14px; }
+.lightbox .toolbar button { padding: 6px 14px; border: none; border-radius: 4px; cursor: pointer; font-size: 12px; font-weight: 500; }
+.btn-purge { background: #3d0000; color: #e94560; }
+.btn-close { background: #333; color: #eee; }
+.lightbox .image-area { flex: 1; display: flex; align-items: center; justify-content: center; padding: 24px; }
+.lightbox .image-area img { max-width: 100%; max-height: 100%; object-fit: contain; border-radius: 4px; }
+.login-overlay { position: fixed; inset: 0; background: #1a1a2e; display: flex; align-items: center; justify-content: center; z-index: 200; }
+.login-box { background: #16213e; padding: 40px; border-radius: 12px; text-align: center; width: 320px; }
+.login-box h2 { margin-bottom: 24px; font-weight: 500; }
+.login-box input { width: 100%; padding: 10px 14px; margin-bottom: 12px; border-radius: 6px; border: 1px solid #0f3460; background: #1a1a2e; color: #eee; font-size: 14px; }
+.login-box button { width: 100%; padding: 10px; background: #e94560; color: #fff; border: none; border-radius: 6px; font-size: 14px; cursor: pointer; font-weight: 500; }
+.login-box .error { color: #e94560; font-size: 12px; margin-top: 8px; display: none; }
+.login-box .note { margin-top: 16px; font-size: 11px; color: #666; }
+.loading { text-align: center; padding: 60px; color: #888; }
+</style>
+</head>
+<body>
+
+<div class="login-overlay" id="loginOverlay">
+  <div class="login-box">
+    <h2>📷 S3 Photo Album</h2>
+    <input type="email" id="emailInput" placeholder="Email">
+    <input type="password" id="passwordInput" placeholder="Password">
+    <div id="newPasswordSection" style="display:none">
+      <input type="password" id="newPasswordInput" placeholder="New Password (required on first login)">
+    </div>
+    <button id="loginBtn" onclick="handleLogin()">Sign In</button>
+    <div class="error" id="loginError"></div>
+    <div class="note">Authenticated via Amazon Cognito</div>
+  </div>
+</div>
+
+<div class="header">
+  <h1>📷 S3 Photo Album</h1>
+  <div class="user">
+    <span class="badge" id="roleBadge">Viewer</span>
+    <span id="userEmail"></span>
+    <button style="background:#333;color:#eee;border:none;padding:4px 10px;border-radius:4px;cursor:pointer;font-size:12px" onclick="logout()">Logout</button>
+  </div>
+</div>
+
+<div class="breadcrumb" id="breadcrumb"></div>
+<div id="burstBtnContainer" style="padding:12px 24px;display:none">
+  <button id="scanBurstBtn" onclick="scanBursts()" style="padding:8px 16px;background:#e94560;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:13px">🔍 Scan for Burst Photos</button>
+  <span id="burstStatus" style="margin-left:12px;font-size:13px;color:#888"></span>
+</div>
+<div class="grid" id="grid"><div class="loading">Sign in to view albums</div></div>
+
+<!-- Burst Review Panel -->
+<div id="burstPanel" style="display:none;padding:24px">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px">
+    <h2 style="font-size:16px;font-weight:500">🔍 Burst Review</h2>
+    <div>
+      <button onclick="acceptAllSuggestions()" style="padding:8px 14px;background:#4ea8de;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:12px;margin-right:8px">✓ Accept All Suggestions</button>
+      <button onclick="deleteUnselected()" style="padding:8px 14px;background:#e94560;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:12px">🗑 Delete Unselected</button>
+      <button onclick="closeBurstPanel()" style="padding:8px 14px;background:#333;color:#eee;border:none;border-radius:4px;cursor:pointer;font-size:12px;margin-left:8px">✕ Close</button>
+    </div>
+  </div>
+  <div id="burstGroups"></div>
+</div>
+
+<div class="lightbox" id="lightbox">
+  <div class="toolbar">
+    <div class="title" id="lightboxTitle"></div>
+    <div style="display:flex;gap:8px">
+      <button style="padding:6px 14px;border:none;border-radius:4px;cursor:pointer;font-size:12px;background:#0f3460;color:#4ea8de" onclick="rotatePhoto('ccw')">↺</button>
+      <button style="padding:6px 14px;border:none;border-radius:4px;cursor:pointer;font-size:12px;background:#0f3460;color:#4ea8de" onclick="rotatePhoto('cw')">↻</button>
+      <button class="btn-purge" id="purgeBtn" onclick="purgePhoto()">🗑 Purge</button>
+      <button class="btn-close" onclick="closeLightbox()">✕ Close</button>
+    </div>
+  </div>
+  <div class="image-area">
+    <img id="lightboxImg" src="" alt="">
+  </div>
+  <div style="padding:12px 24px;background:#111;border-top:1px solid #333;display:flex;gap:12px;align-items:center">
+    <input type="text" id="commentInput" placeholder="Add a comment..." style="flex:1;padding:8px 12px;border-radius:4px;border:1px solid #333;background:#1a1a2e;color:#eee;font-size:13px">
+    <button onclick="saveComment()" style="padding:8px 16px;background:#4ea8de;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:13px">Save</button>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/amazon-cognito-identity-js@6/dist/amazon-cognito-identity.min.js"></script>
+<script src="https://sdk.amazonaws.com/js/aws-sdk-2.1692.0.min.js"></script>
+<script>
+const CONFIG = {
+  region: '%%REGION%%',
+  userPoolId: '%%USER_POOL_ID%%',
+  clientId: '%%CLIENT_ID%%',
+  identityPoolId: '%%IDENTITY_POOL_ID%%',
+  photoBucket: '%%PHOTO_BUCKET%%',
+  burstApiUrl: '%%BURST_API_URL%%',
+  rotateApiUrl: '%%ROTATE_API_URL%%'
+};
+
+let currentPath = '';
+let userSession = null;
+let userGroup = null;
+
+const poolData = { UserPoolId: CONFIG.userPoolId, ClientId: CONFIG.clientId };
+const userPool = new AmazonCognitoIdentity.CognitoUserPool(poolData);
+
+function showError(msg) {
+  const el = document.getElementById('loginError');
+  el.textContent = msg;
+  el.style.display = 'block';
+}
+
+let cognitoUser = null;
+
+function handleLogin() {
+  const email = document.getElementById('emailInput').value;
+  const password = document.getElementById('passwordInput').value;
+  const newPassword = document.getElementById('newPasswordInput').value;
+
+  if (cognitoUser && newPassword) {
+    cognitoUser.completeNewPasswordChallenge(newPassword, {}, {
+      onSuccess: (session) => { onLoginSuccess(session, email); },
+      onFailure: (err) => { showError(err.message); }
+    });
+    return;
+  }
+
+  const authDetails = new AmazonCognitoIdentity.AuthenticationDetails({ Username: email, Password: password });
+  cognitoUser = new AmazonCognitoIdentity.CognitoUser({ Username: email, Pool: userPool });
+
+  cognitoUser.authenticateUser(authDetails, {
+    onSuccess: (session) => { onLoginSuccess(session, email); },
+    onFailure: (err) => { showError(err.message); },
+    newPasswordRequired: () => {
+      document.getElementById('newPasswordSection').style.display = 'block';
+      document.getElementById('loginBtn').textContent = 'Set New Password';
+      showError('Please set a new password.');
+    }
+  });
+}
+
+function onLoginSuccess(session, email) {
+  userSession = session;
+  document.getElementById('loginOverlay').style.display = 'none';
+  document.getElementById('userEmail').textContent = email;
+
+  const payload = session.getIdToken().decodePayload();
+  const groups = payload['cognito:groups'] || [];
+  userGroup = groups.includes('Editors') ? 'Editors' : 'Viewers';
+  document.getElementById('roleBadge').textContent = userGroup === 'Editors' ? 'Editor' : 'Viewer';
+  document.getElementById('roleBadge').className = 'badge' + (userGroup === 'Viewers' ? ' viewer' : '');
+  document.getElementById('purgeBtn').style.display = userGroup === 'Editors' ? '' : 'none';
+
+  setupAWS(session);
+}
+
+function setupAWS(session) {
+  const token = session.getIdToken().getJwtToken();
+  const logins = {};
+  logins[`cognito-idp.${CONFIG.region}.amazonaws.com/${CONFIG.userPoolId}`] = token;
+
+  AWS.config.region = CONFIG.region;
+  AWS.config.credentials = new AWS.CognitoIdentityCredentials({
+    IdentityPoolId: CONFIG.identityPoolId,
+    Logins: logins
+  });
+
+  AWS.config.credentials.refresh((err) => {
+    if (err) { console.error(err); return; }
+    listObjects('');
+  });
+}
+
+function listObjects(prefix) {
+  currentPath = prefix;
+  updateBreadcrumb();
+  document.getElementById('burstBtnContainer').style.display = (prefix && CONFIG.burstApiUrl) ? 'block' : 'none';
+  document.getElementById('burstStatus').textContent = '';
+  const s3 = new AWS.S3();
+  s3.listObjectsV2({
+    Bucket: CONFIG.photoBucket,
+    Prefix: prefix,
+    Delimiter: '/'
+  }, (err, data) => {
+    if (err) { console.error(err); return; }
+    renderGrid(data);
+  });
+}
+
+function updateBreadcrumb() {
+  const parts = currentPath.split('/').filter(Boolean);
+  let html = `<a onclick="listObjects('')">${CONFIG.photoBucket}</a>`;
+  let path = '';
+  parts.forEach(p => {
+    path += p + '/';
+    const pp = path;
+    html += ` / <a onclick="listObjects('${pp}')">${p}</a>`;
+  });
+  document.getElementById('breadcrumb').innerHTML = html;
+}
+
+function renderGrid(data) {
+  const grid = document.getElementById('grid');
+  let html = '';
+
+  (data.CommonPrefixes || []).forEach(p => {
+    const name = p.Prefix.replace(currentPath, '');
+    html += `<div class="card" onclick="listObjects('${p.Prefix}')">
+      <div class="thumb">📁</div>
+      <div class="info"><div class="name">${name}</div></div>
+    </div>`;
+  });
+
+  (data.Contents || []).forEach(obj => {
+    if (obj.Key === currentPath) return;
+    const name = obj.Key.replace(currentPath, '');
+    const size = (obj.Size / 1024 / 1024).toFixed(1) + ' MB';
+    const isImage = /\.(jpg|jpeg|png|gif|webp|bmp)$/i.test(name);
+    if (isImage) {
+      html += `<div class="card" onclick="openPhoto('${obj.Key}')">
+        <div class="thumb"><img src="" data-key="${obj.Key}" onload="this.style.opacity=1" style="opacity:0;transition:opacity 0.3s"></div>
+        <div class="info"><div class="name">${name}</div><div class="meta">${size}</div></div>
+      </div>`;
+    } else {
+      html += `<div class="card">
+        <div class="thumb">📄</div>
+        <div class="info"><div class="name">${name}</div><div class="meta">${size}</div></div>
+      </div>`;
+    }
+  });
+
+  if (!html) html = '<div class="loading">No items in this folder</div>';
+  grid.innerHTML = html;
+
+  // Load thumbnails
+  document.querySelectorAll('[data-key]').forEach(img => {
+    const s3 = new AWS.S3();
+    s3.getSignedUrl('getObject', { Bucket: CONFIG.photoBucket, Key: img.dataset.key, Expires: 300 }, (err, url) => {
+      if (!err) img.src = url;
+    });
+  });
+}
+
+let currentPhotoKey = '';
+function openPhoto(key) {
+  currentPhotoKey = key;
+  const name = key.split('/').pop();
+  document.getElementById('lightboxTitle').textContent = name;
+  document.getElementById('lightbox').classList.add('active');
+  document.getElementById('commentInput').value = '';
+  loadComment(key);
+  const s3 = new AWS.S3();
+  s3.getSignedUrl('getObject', { Bucket: CONFIG.photoBucket, Key: key, Expires: 300 }, (err, url) => {
+    if (!err) document.getElementById('lightboxImg').src = url;
+  });
+}
+
+function closeLightbox() {
+  document.getElementById('lightbox').classList.remove('active');
+  document.getElementById('lightboxImg').src = '';
+}
+
+function purgePhoto() {
+  if (!confirm('Permanently delete this photo?')) return;
+  const s3 = new AWS.S3();
+  s3.deleteObject({ Bucket: CONFIG.photoBucket, Key: currentPhotoKey }, (err) => {
+    if (err) { alert('Delete failed: ' + err.message); return; }
+    closeLightbox();
+    listObjects(currentPath);
+  });
+}
+
+function logout() {
+  const user = userPool.getCurrentUser();
+  if (user) user.signOut();
+  location.reload();
+}
+
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeLightbox(); });
+
+// --- Burst Detection ---
+const BURST_API = CONFIG.burstApiUrl;
+let burstData = null;
+let burstSelections = {};
+
+function scanBursts() {
+  if (!BURST_API || BURST_API === '') { alert('Burst API not configured'); return; }
+  document.getElementById('burstStatus').textContent = 'Scanning...';
+  fetch(BURST_API, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ bucket: CONFIG.photoBucket, prefix: currentPath })
+  })
+  .then(r => r.json())
+  .then(data => {
+    const result = typeof data.body === 'string' ? JSON.parse(data.body) : data;
+    burstData = result;
+    if (!result.burst_groups || result.burst_groups.length === 0) {
+      document.getElementById('burstStatus').textContent = 'No burst groups found.';
+      return;
+    }
+    document.getElementById('burstStatus').textContent = '';
+    renderBurstPanel(result);
+  })
+  .catch(e => { document.getElementById('burstStatus').textContent = 'Error: ' + e.message; });
+}
+
+function renderBurstPanel(data) {
+  document.getElementById('grid').style.display = 'none';
+  document.getElementById('burstPanel').style.display = 'block';
+  burstSelections = {};
+
+  let html = `<p style="margin-bottom:16px;font-size:13px;color:#888">Found ${data.burst_groups.length} burst group(s) — ${data.potential_savings}</p>`;
+
+  data.burst_groups.forEach((group, gi) => {
+    burstSelections[gi] = group.suggested_keep;
+    const timeRange = group.timestamp_range[0].split('T')[1] || '';
+    html += `<div style="margin-bottom:24px;padding:16px;background:#16213e;border-radius:8px">`;
+    html += `<div style="font-size:13px;color:#4ea8de;margin-bottom:12px">── ${group.group_id} (${group.timestamp_range[0].split('T')[0]} ${timeRange}) ──</div>`;
+    html += `<div style="display:flex;gap:12px;flex-wrap:wrap">`;
+
+    group.photos.forEach(photo => {
+      const name = photo.key.split('/').pop();
+      const isSuggested = photo.key === group.suggested_keep;
+      html += `<div style="text-align:center;width:150px">`;
+      html += `<div style="width:150px;height:150px;background:#0f3460;border-radius:6px;overflow:hidden;border:3px solid ${isSuggested ? '#4ea8de' : 'transparent'}" id="thumb-${gi}-${name}">`;
+      html += `<img data-burst-key="${photo.key}" style="width:100%;height:100%;object-fit:cover;opacity:0;transition:opacity 0.3s" onload="this.style.opacity=1">`;
+      html += `</div>`;
+      html += `<div style="margin-top:6px;font-size:11px">${name}</div>`;
+      html += `<div style="font-size:10px;color:#666">Sharpness: ${photo.sharpness}</div>`;
+      html += `<label style="font-size:11px;cursor:pointer;display:block;margin-top:4px">`;
+      html += `<input type="radio" name="burst-${gi}" value="${photo.key}" ${isSuggested ? 'checked' : ''} onchange="burstSelections[${gi}]='${photo.key}'"> `;
+      html += `${isSuggested ? '★ ' : ''}Keep</label>`;
+      html += `</div>`;
+    });
+
+    html += `</div></div>`;
+  });
+
+  document.getElementById('burstGroups').innerHTML = html;
+
+  // Load burst thumbnails
+  document.querySelectorAll('[data-burst-key]').forEach(img => {
+    const s3 = new AWS.S3();
+    s3.getSignedUrl('getObject', { Bucket: CONFIG.photoBucket, Key: img.dataset.burstKey, Expires: 300 }, (err, url) => {
+      if (!err) img.src = url;
+    });
+  });
+}
+
+function acceptAllSuggestions() {
+  if (!burstData) return;
+  burstData.burst_groups.forEach((group, gi) => {
+    burstSelections[gi] = group.suggested_keep;
+    const radio = document.querySelector(`input[name="burst-${gi}"][value="${group.suggested_keep}"]`);
+    if (radio) radio.checked = true;
+  });
+}
+
+function deleteUnselected() {
+  if (!burstData) return;
+  const toDelete = [];
+  burstData.burst_groups.forEach((group, gi) => {
+    const keep = burstSelections[gi];
+    group.photos.forEach(p => {
+      if (p.key !== keep) toDelete.push(p.key);
+    });
+  });
+
+  if (!confirm(`Delete ${toDelete.length} photos? This cannot be undone.`)) return;
+
+  const s3 = new AWS.S3();
+  let deleted = 0;
+  toDelete.forEach(key => {
+    s3.deleteObject({ Bucket: CONFIG.photoBucket, Key: key }, (err) => {
+      deleted++;
+      if (deleted === toDelete.length) {
+        alert(`Deleted ${toDelete.length} photos.`);
+        closeBurstPanel();
+        listObjects(currentPath);
+      }
+    });
+  });
+}
+
+function closeBurstPanel() {
+  document.getElementById('burstPanel').style.display = 'none';
+  document.getElementById('grid').style.display = 'grid';
+}
+
+// --- Rotate ---
+function rotatePhoto(direction) {
+  if (!CONFIG.rotateApiUrl) { alert('Rotate API not configured'); return; }
+  fetch(CONFIG.rotateApiUrl, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ bucket: CONFIG.photoBucket, key: currentPhotoKey, direction: direction })
+  })
+  .then(r => r.json())
+  .then(() => {
+    // Reload image with cache-bust
+    const s3 = new AWS.S3();
+    s3.getSignedUrl('getObject', { Bucket: CONFIG.photoBucket, Key: currentPhotoKey, Expires: 300 }, (err, url) => {
+      if (!err) document.getElementById('lightboxImg').src = url + '&t=' + Date.now();
+    });
+  })
+  .catch(e => alert('Rotate failed: ' + e.message));
+}
+
+// --- Comments (S3 sidecar JSON) ---
+const META_PREFIX = '.meta/';
+
+function loadComment(key) {
+  const s3 = new AWS.S3();
+  const metaKey = META_PREFIX + key + '.json';
+  s3.getObject({ Bucket: CONFIG.photoBucket, Key: metaKey }, (err, data) => {
+    if (err) {
+      document.getElementById('commentInput').value = '';
+      return;
+    }
+    const meta = JSON.parse(data.Body.toString());
+    document.getElementById('commentInput').value = meta.comment || '';
+  });
+}
+
+function saveComment() {
+  const comment = document.getElementById('commentInput').value;
+  const s3 = new AWS.S3();
+  const metaKey = META_PREFIX + currentPhotoKey + '.json';
+  const meta = JSON.stringify({ comment: comment, updatedAt: new Date().toISOString() });
+  s3.putObject({
+    Bucket: CONFIG.photoBucket,
+    Key: metaKey,
+    Body: meta,
+    ContentType: 'application/json'
+  }, (err) => {
+    if (err) { alert('Save failed: ' + err.message); return; }
+    // Brief visual feedback
+    const btn = event.target;
+    btn.textContent = '✓ Saved';
+    setTimeout(() => { btn.textContent = 'Save'; }, 1500);
+  });
+}
+</script>
+</body>
+</html>
