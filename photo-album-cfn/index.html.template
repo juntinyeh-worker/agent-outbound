@@ -266,10 +266,16 @@ function renderGrid(data) {
     const name = obj.Key.replace(currentPath, '');
     const size = (obj.Size / 1024 / 1024).toFixed(1) + ' MB';
     const isImage = /\.(jpg|jpeg|png|gif|webp|bmp)$/i.test(name);
+    const isVideo = /\.(mov|mp4|avi|mkv|webm|m4v)$/i.test(name);
     if (isImage) {
       html += `<div class="card" onclick="openPhoto('${obj.Key}')">
         <div class="thumb"><img src="" data-key="${obj.Key}" onload="this.style.opacity=1" style="opacity:0;transition:opacity 0.3s"></div>
         <div class="info"><div class="name">${name}</div><div class="meta">${size}</div></div>
+      </div>`;
+    } else if (isVideo) {
+      html += `<div class="card" onclick="openPhoto('${obj.Key}')">
+        <div class="thumb" style="position:relative"><img src="" data-key="${obj.Key}" data-video="true" onload="this.style.opacity=1" style="opacity:0;transition:opacity 0.3s"><span style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);font-size:32px;opacity:0.8">▶</span></div>
+        <div class="info"><div class="name">${name}</div><div class="meta">🎬 ${size}</div></div>
       </div>`;
     } else {
       html += `<div class="card">
@@ -285,10 +291,14 @@ function renderGrid(data) {
   // Load thumbnails
   document.querySelectorAll('[data-key]').forEach(img => {
     const s3 = new AWS.S3();
-    const thumbKey = '.thumbnails/' + img.dataset.key;
-    // Try thumbnail first, fall back to original
+    const isVideo = img.dataset.video === 'true';
+    const thumbKey = isVideo
+      ? '.thumbnails/' + img.dataset.key + '.jpg'
+      : '.thumbnails/' + img.dataset.key;
+    // Try thumbnail first, fall back to original (images only)
     s3.headObject({ Bucket: currentBucket, Key: thumbKey }, (err) => {
-      const key = err ? img.dataset.key : thumbKey;
+      const key = err ? (isVideo ? null : img.dataset.key) : thumbKey;
+      if (!key) { img.parentElement.innerHTML = '🎬'; return; }
       s3.getSignedUrl('getObject', { Bucket: currentBucket, Key: key, Expires: 300 }, (err, url) => {
         if (!err) img.src = url;
       });
