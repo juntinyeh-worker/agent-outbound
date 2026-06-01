@@ -180,12 +180,18 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; b
   <div class="toolbar">
     <div class="title" id="lightboxTitle"></div>
     <div style="display:flex;gap:8px">
+      <button style="padding:6px 14px;border:none;border-radius:4px;cursor:pointer;font-size:12px;background:#0f3460;color:#4ea8de" onclick="rotatePhoto('ccw')">↺</button>
+      <button style="padding:6px 14px;border:none;border-radius:4px;cursor:pointer;font-size:12px;background:#0f3460;color:#4ea8de" onclick="rotatePhoto('cw')">↻</button>
       <button class="btn-purge" id="purgeBtn" onclick="purgePhoto()">🗑 Purge</button>
       <button class="btn-close" onclick="closeLightbox()">✕ Close</button>
     </div>
   </div>
   <div class="image-area">
     <img id="lightboxImg" src="" alt="">
+  </div>
+  <div style="padding:12px 24px;background:#111;border-top:1px solid #333;display:flex;gap:12px;align-items:center">
+    <input type="text" id="commentInput" placeholder="Add a comment..." style="flex:1;padding:8px 12px;border-radius:4px;border:1px solid #333;background:#1a1a2e;color:#eee;font-size:13px">
+    <button onclick="saveComment()" style="padding:8px 16px;background:#4ea8de;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:13px">Save</button>
   </div>
 </div>
 
@@ -198,7 +204,8 @@ const CONFIG = {
   clientId: '%%CLIENT_ID%%',
   identityPoolId: '%%IDENTITY_POOL_ID%%',
   photoBucket: '%%PHOTO_BUCKET%%',
-  burstApiUrl: '%%BURST_API_URL%%'
+  burstApiUrl: '%%BURST_API_URL%%',
+  rotateApiUrl: '%%ROTATE_API_URL%%'
 };
 
 let currentPath = '';
@@ -351,6 +358,8 @@ function openPhoto(key) {
   const name = key.split('/').pop();
   document.getElementById('lightboxTitle').textContent = name;
   document.getElementById('lightbox').classList.add('active');
+  document.getElementById('commentInput').value = '';
+  loadComment(key);
   const s3 = new AWS.S3();
   s3.getSignedUrl('getObject', { Bucket: CONFIG.photoBucket, Key: key, Expires: 300 }, (err, url) => {
     if (!err) document.getElementById('lightboxImg').src = url;
@@ -489,6 +498,60 @@ function closeBurstPanel() {
   document.getElementById('burstPanel').style.display = 'none';
   document.getElementById('grid').style.display = 'grid';
 }
+
+// --- Rotate ---
+function rotatePhoto(direction) {
+  if (!CONFIG.rotateApiUrl) { alert('Rotate API not configured'); return; }
+  fetch(CONFIG.rotateApiUrl, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ bucket: CONFIG.photoBucket, key: currentPhotoKey, direction: direction })
+  })
+  .then(r => r.json())
+  .then(() => {
+    // Reload image with cache-bust
+    const s3 = new AWS.S3();
+    s3.getSignedUrl('getObject', { Bucket: CONFIG.photoBucket, Key: currentPhotoKey, Expires: 300 }, (err, url) => {
+      if (!err) document.getElementById('lightboxImg').src = url + '&t=' + Date.now();
+    });
+  })
+  .catch(e => alert('Rotate failed: ' + e.message));
+}
+
+// --- Comments (S3 sidecar JSON) ---
+const META_PREFIX = '.meta/';
+
+function loadComment(key) {
+  const s3 = new AWS.S3();
+  const metaKey = META_PREFIX + key + '.json';
+  s3.getObject({ Bucket: CONFIG.photoBucket, Key: metaKey }, (err, data) => {
+    if (err) {
+      document.getElementById('commentInput').value = '';
+      return;
+    }
+    const meta = JSON.parse(data.Body.toString());
+    document.getElementById('commentInput').value = meta.comment || '';
+  });
+}
+
+function saveComment() {
+  const comment = document.getElementById('commentInput').value;
+  const s3 = new AWS.S3();
+  const metaKey = META_PREFIX + currentPhotoKey + '.json';
+  const meta = JSON.stringify({ comment: comment, updatedAt: new Date().toISOString() });
+  s3.putObject({
+    Bucket: CONFIG.photoBucket,
+    Key: metaKey,
+    Body: meta,
+    ContentType: 'application/json'
+  }, (err) => {
+    if (err) { alert('Save failed: ' + err.message); return; }
+    // Brief visual feedback
+    const btn = event.target;
+    btn.textContent = '✓ Saved';
+    setTimeout(() => { btn.textContent = 'Save'; }, 1500);
+  });
+}
 </script>
 </body>
 </html>
@@ -512,6 +575,18 @@ if [ -z "$BURST_API_URL" ] || [ "$BURST_API_URL" = "None" ]; then
   echo "  (Burst detector not deployed — scan button will be hidden)"
 fi
 sed -i "s|%%BURST_API_URL%%|$BURST_API_URL|g" /tmp/index.html
+
+# Check if photo-rotate stack exists
+ROTATE_API_URL=""
+ROTATE_API_URL=$(aws cloudformation describe-stacks \
+  --stack-name photo-rotate --region "$REGION" \
+  --query "Stacks[0].Outputs[?OutputKey=='RotateApiUrl'].OutputValue" \
+  --output text 2>/dev/null || echo "")
+if [ -z "$ROTATE_API_URL" ] || [ "$ROTATE_API_URL" = "None" ]; then
+  ROTATE_API_URL=""
+  echo "  (Rotate not deployed — rotate buttons will be hidden)"
+fi
+sed -i "s|%%ROTATE_API_URL%%|$ROTATE_API_URL|g" /tmp/index.html
 
 # Upload to site bucket
 aws s3 cp /tmp/index.html "s3://$SITE_BUCKET/index.html" \

@@ -1,0 +1,110 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Photo Rotate Lambda + API Gateway
+
+Parameters:
+  PhotoBucketName:
+    Type: String
+    Description: Existing photo S3 bucket name
+
+Resources:
+  RotateRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: S3ReadWrite
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                Resource: !Sub 'arn:aws:s3:::${PhotoBucketName}/*'
+
+  RotateLayerBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+
+  RotateLayer:
+    Type: AWS::Lambda::LayerVersion
+    Properties:
+      LayerName: rotate-pillow
+      CompatibleRuntimes: [python3.12]
+      Content:
+        S3Bucket: !Ref RotateLayerBucket
+        S3Key: rotate-layer.zip
+
+  RotateFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: photo-rotate
+      Runtime: python3.12
+      Handler: lambda_function.handler
+      Timeout: 60
+      MemorySize: 512
+      Role: !GetAtt RotateRole.Arn
+      Layers:
+        - !Ref RotateLayer
+      Code:
+        ZipFile: |
+          def handler(event, context):
+              return {'statusCode': 200, 'body': '{}'}
+
+  RotateApi:
+    Type: AWS::ApiGatewayV2::Api
+    Properties:
+      Name: photo-rotate-api
+      ProtocolType: HTTP
+      CorsConfiguration:
+        AllowOrigins: ['*']
+        AllowMethods: [POST, OPTIONS]
+        AllowHeaders: ['*']
+
+  RotateIntegration:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref RotateApi
+      IntegrationType: AWS_PROXY
+      IntegrationUri: !GetAtt RotateFunction.Arn
+      PayloadFormatVersion: '2.0'
+
+  RotateRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref RotateApi
+      RouteKey: POST /rotate
+      Target: !Sub 'integrations/${RotateIntegration}'
+
+  RotateStage:
+    Type: AWS::ApiGatewayV2::Stage
+    Properties:
+      ApiId: !Ref RotateApi
+      StageName: '$default'
+      AutoDeploy: true
+
+  RotatePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref RotateFunction
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub 'arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${RotateApi}/*'
+
+Outputs:
+  RotateApiUrl:
+    Value: !Sub 'https://${RotateApi}.execute-api.${AWS::Region}.amazonaws.com/rotate'
+  RotateLayerBucket:
+    Value: !Ref RotateLayerBucket
