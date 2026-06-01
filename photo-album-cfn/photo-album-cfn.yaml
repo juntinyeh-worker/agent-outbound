@@ -4,12 +4,42 @@ Description: S3 Photo Album - CloudFront + Cognito + existing photo bucket
 Parameters:
   PhotoBucketName:
     Type: String
-    Description: Name of your existing S3 bucket containing photos
+    Description: Name of your S3 bucket for photos (will be created if it doesn't exist)
   AdminEmail:
     Type: String
     Description: Admin email (will receive temporary password)
+  CreatePhotoBucket:
+    Type: String
+    Default: 'false'
+    AllowedValues: ['true', 'false']
+    Description: Whether to create the photo bucket
+
+Conditions:
+  ShouldCreateBucket: !Equals [!Ref CreatePhotoBucket, 'true']
+  UseExistingBucket: !Not [!Equals [!Ref CreatePhotoBucket, 'true']]
 
 Resources:
+  # --- Photo Bucket (created only if requested) ---
+  PhotoBucket:
+    Type: AWS::S3::Bucket
+    Condition: ShouldCreateBucket
+    Properties:
+      BucketName: !Ref PhotoBucketName
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      CorsConfiguration:
+        CorsRules:
+          - AllowedOrigins: ['*']
+            AllowedMethods: [GET, PUT, DELETE, HEAD]
+            AllowedHeaders: ['*']
+            MaxAgeSeconds: 3600
   # --- Site Bucket ---
   SiteBucket:
     Type: AWS::S3::Bucket
@@ -266,6 +296,7 @@ Resources:
   # --- Set CORS on existing photo bucket ---
   BucketCorsRole:
     Type: AWS::IAM::Role
+    Condition: UseExistingBucket
     Properties:
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
@@ -289,6 +320,7 @@ Resources:
 
   BucketCorsFunction:
     Type: AWS::Lambda::Function
+    Condition: UseExistingBucket
     Properties:
       Runtime: nodejs20.x
       Handler: index.handler
@@ -324,6 +356,7 @@ Resources:
 
   SetBucketCors:
     Type: Custom::BucketCors
+    Condition: UseExistingBucket
     Properties:
       ServiceToken: !GetAtt BucketCorsFunction.Arn
       BUCKET: !Ref PhotoBucketName

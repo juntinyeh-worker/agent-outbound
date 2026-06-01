@@ -17,10 +17,25 @@ echo "✓ AWS CLI found"
 read -p "AWS Region [us-east-1]: " REGION
 REGION=${REGION:-us-east-1}
 
-read -p "Existing photo S3 bucket name: " PHOTO_BUCKET
+read -p "Photo S3 bucket name: " PHOTO_BUCKET
 if [ -z "$PHOTO_BUCKET" ]; then
   echo "ERROR: Photo bucket name is required."
   exit 1
+fi
+
+# Check if bucket exists
+CREATE_BUCKET="false"
+if aws s3api head-bucket --bucket "$PHOTO_BUCKET" --region "$REGION" 2>/dev/null; then
+  echo "✓ Bucket '$PHOTO_BUCKET' exists"
+else
+  read -p "Bucket '$PHOTO_BUCKET' doesn't exist. Create it? [Y/n]: " CREATE_CONFIRM
+  CREATE_CONFIRM=${CREATE_CONFIRM:-Y}
+  if [[ "$CREATE_CONFIRM" =~ ^[Yy]$ ]]; then
+    CREATE_BUCKET="true"
+  else
+    echo "ERROR: Bucket must exist or be created."
+    exit 1
+  fi
 fi
 
 read -p "Admin email (will receive temp password): " ADMIN_EMAIL
@@ -34,7 +49,7 @@ STACK_NAME="photo-album"
 echo ""
 echo "Deploying with:"
 echo "  Region:       $REGION"
-echo "  Photo Bucket: $PHOTO_BUCKET"
+echo "  Photo Bucket: $PHOTO_BUCKET (create: $CREATE_BUCKET)"
 echo "  Admin Email:  $ADMIN_EMAIL"
 echo "  Stack Name:   $STACK_NAME"
 echo ""
@@ -54,6 +69,7 @@ aws cloudformation deploy \
   --parameter-overrides \
     PhotoBucketName="$PHOTO_BUCKET" \
     AdminEmail="$ADMIN_EMAIL" \
+    CreatePhotoBucket="$CREATE_BUCKET" \
   --capabilities CAPABILITY_IAM \
   --region "$REGION"
 
