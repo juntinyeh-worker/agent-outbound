@@ -157,7 +157,24 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; b
 </div>
 
 <div class="breadcrumb" id="breadcrumb"></div>
+<div id="burstBtnContainer" style="padding:12px 24px;display:none">
+  <button id="scanBurstBtn" onclick="scanBursts()" style="padding:8px 16px;background:#e94560;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:13px">🔍 Scan for Burst Photos</button>
+  <span id="burstStatus" style="margin-left:12px;font-size:13px;color:#888"></span>
+</div>
 <div class="grid" id="grid"><div class="loading">Sign in to view albums</div></div>
+
+<!-- Burst Review Panel -->
+<div id="burstPanel" style="display:none;padding:24px">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px">
+    <h2 style="font-size:16px;font-weight:500">🔍 Burst Review</h2>
+    <div>
+      <button onclick="acceptAllSuggestions()" style="padding:8px 14px;background:#4ea8de;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:12px;margin-right:8px">✓ Accept All Suggestions</button>
+      <button onclick="deleteUnselected()" style="padding:8px 14px;background:#e94560;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:12px">🗑 Delete Unselected</button>
+      <button onclick="closeBurstPanel()" style="padding:8px 14px;background:#333;color:#eee;border:none;border-radius:4px;cursor:pointer;font-size:12px;margin-left:8px">✕ Close</button>
+    </div>
+  </div>
+  <div id="burstGroups"></div>
+</div>
 
 <div class="lightbox" id="lightbox">
   <div class="toolbar">
@@ -180,7 +197,8 @@ const CONFIG = {
   userPoolId: '%%USER_POOL_ID%%',
   clientId: '%%CLIENT_ID%%',
   identityPoolId: '%%IDENTITY_POOL_ID%%',
-  photoBucket: '%%PHOTO_BUCKET%%'
+  photoBucket: '%%PHOTO_BUCKET%%',
+  burstApiUrl: '%%BURST_API_URL%%'
 };
 
 let currentPath = '';
@@ -260,6 +278,8 @@ function setupAWS(session) {
 function listObjects(prefix) {
   currentPath = prefix;
   updateBreadcrumb();
+  document.getElementById('burstBtnContainer').style.display = (prefix && CONFIG.burstApiUrl) ? 'block' : 'none';
+  document.getElementById('burstStatus').textContent = '';
   const s3 = new AWS.S3();
   s3.listObjectsV2({
     Bucket: CONFIG.photoBucket,
@@ -359,6 +379,116 @@ function logout() {
 }
 
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeLightbox(); });
+
+// --- Burst Detection ---
+const BURST_API = CONFIG.burstApiUrl;
+let burstData = null;
+let burstSelections = {};
+
+function scanBursts() {
+  if (!BURST_API || BURST_API === '') { alert('Burst API not configured'); return; }
+  document.getElementById('burstStatus').textContent = 'Scanning...';
+  fetch(BURST_API, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ bucket: CONFIG.photoBucket, prefix: currentPath })
+  })
+  .then(r => r.json())
+  .then(data => {
+    const result = typeof data.body === 'string' ? JSON.parse(data.body) : data;
+    burstData = result;
+    if (!result.burst_groups || result.burst_groups.length === 0) {
+      document.getElementById('burstStatus').textContent = 'No burst groups found.';
+      return;
+    }
+    document.getElementById('burstStatus').textContent = '';
+    renderBurstPanel(result);
+  })
+  .catch(e => { document.getElementById('burstStatus').textContent = 'Error: ' + e.message; });
+}
+
+function renderBurstPanel(data) {
+  document.getElementById('grid').style.display = 'none';
+  document.getElementById('burstPanel').style.display = 'block';
+  burstSelections = {};
+
+  let html = `<p style="margin-bottom:16px;font-size:13px;color:#888">Found ${data.burst_groups.length} burst group(s) — ${data.potential_savings}</p>`;
+
+  data.burst_groups.forEach((group, gi) => {
+    burstSelections[gi] = group.suggested_keep;
+    const timeRange = group.timestamp_range[0].split('T')[1] || '';
+    html += `<div style="margin-bottom:24px;padding:16px;background:#16213e;border-radius:8px">`;
+    html += `<div style="font-size:13px;color:#4ea8de;margin-bottom:12px">── ${group.group_id} (${group.timestamp_range[0].split('T')[0]} ${timeRange}) ──</div>`;
+    html += `<div style="display:flex;gap:12px;flex-wrap:wrap">`;
+
+    group.photos.forEach(photo => {
+      const name = photo.key.split('/').pop();
+      const isSuggested = photo.key === group.suggested_keep;
+      html += `<div style="text-align:center;width:150px">`;
+      html += `<div style="width:150px;height:150px;background:#0f3460;border-radius:6px;overflow:hidden;border:3px solid ${isSuggested ? '#4ea8de' : 'transparent'}" id="thumb-${gi}-${name}">`;
+      html += `<img data-burst-key="${photo.key}" style="width:100%;height:100%;object-fit:cover;opacity:0;transition:opacity 0.3s" onload="this.style.opacity=1">`;
+      html += `</div>`;
+      html += `<div style="margin-top:6px;font-size:11px">${name}</div>`;
+      html += `<div style="font-size:10px;color:#666">Sharpness: ${photo.sharpness}</div>`;
+      html += `<label style="font-size:11px;cursor:pointer;display:block;margin-top:4px">`;
+      html += `<input type="radio" name="burst-${gi}" value="${photo.key}" ${isSuggested ? 'checked' : ''} onchange="burstSelections[${gi}]='${photo.key}'"> `;
+      html += `${isSuggested ? '★ ' : ''}Keep</label>`;
+      html += `</div>`;
+    });
+
+    html += `</div></div>`;
+  });
+
+  document.getElementById('burstGroups').innerHTML = html;
+
+  // Load burst thumbnails
+  document.querySelectorAll('[data-burst-key]').forEach(img => {
+    const s3 = new AWS.S3();
+    s3.getSignedUrl('getObject', { Bucket: CONFIG.photoBucket, Key: img.dataset.burstKey, Expires: 300 }, (err, url) => {
+      if (!err) img.src = url;
+    });
+  });
+}
+
+function acceptAllSuggestions() {
+  if (!burstData) return;
+  burstData.burst_groups.forEach((group, gi) => {
+    burstSelections[gi] = group.suggested_keep;
+    const radio = document.querySelector(`input[name="burst-${gi}"][value="${group.suggested_keep}"]`);
+    if (radio) radio.checked = true;
+  });
+}
+
+function deleteUnselected() {
+  if (!burstData) return;
+  const toDelete = [];
+  burstData.burst_groups.forEach((group, gi) => {
+    const keep = burstSelections[gi];
+    group.photos.forEach(p => {
+      if (p.key !== keep) toDelete.push(p.key);
+    });
+  });
+
+  if (!confirm(`Delete ${toDelete.length} photos? This cannot be undone.`)) return;
+
+  const s3 = new AWS.S3();
+  let deleted = 0;
+  toDelete.forEach(key => {
+    s3.deleteObject({ Bucket: CONFIG.photoBucket, Key: key }, (err) => {
+      deleted++;
+      if (deleted === toDelete.length) {
+        alert(`Deleted ${toDelete.length} photos.`);
+        closeBurstPanel();
+        listObjects(currentPath);
+      }
+    });
+  });
+}
+
+function closeBurstPanel() {
+  document.getElementById('burstPanel').style.display = 'none';
+  document.getElementById('grid').style.display = 'grid';
+}
 </script>
 </body>
 </html>
@@ -370,6 +500,18 @@ sed -i "s|%%USER_POOL_ID%%|$USER_POOL_ID|g" /tmp/index.html
 sed -i "s|%%CLIENT_ID%%|$CLIENT_ID|g" /tmp/index.html
 sed -i "s|%%IDENTITY_POOL_ID%%|$IDENTITY_POOL_ID|g" /tmp/index.html
 sed -i "s|%%PHOTO_BUCKET%%|$PHOTO_BUCKET|g" /tmp/index.html
+
+# Check if burst-detector stack exists
+BURST_API_URL=""
+BURST_API_URL=$(aws cloudformation describe-stacks \
+  --stack-name burst-detector --region "$REGION" \
+  --query "Stacks[0].Outputs[?OutputKey=='BurstApiUrl'].OutputValue" \
+  --output text 2>/dev/null || echo "")
+if [ -z "$BURST_API_URL" ] || [ "$BURST_API_URL" = "None" ]; then
+  BURST_API_URL=""
+  echo "  (Burst detector not deployed — scan button will be hidden)"
+fi
+sed -i "s|%%BURST_API_URL%%|$BURST_API_URL|g" /tmp/index.html
 
 # Upload to site bucket
 aws s3 cp /tmp/index.html "s3://$SITE_BUCKET/index.html" \

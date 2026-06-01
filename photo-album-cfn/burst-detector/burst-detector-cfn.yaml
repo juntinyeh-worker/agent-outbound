@@ -1,0 +1,121 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Burst Photo Detector - Lambda + API Gateway
+
+Parameters:
+  PhotoBucketName:
+    Type: String
+    Description: Existing photo S3 bucket name
+  PhotoAlbumStackName:
+    Type: String
+    Default: photo-album
+    Description: Name of the photo-album stack (to import Cognito config)
+
+Resources:
+  # --- Lambda Layer (dependencies) ---
+  DepsLayer:
+    Type: AWS::Lambda::LayerVersion
+    Properties:
+      LayerName: burst-detector-deps
+      Description: Pillow, imagehash, exifread, numpy, scipy
+      CompatibleRuntimes: [python3.12]
+      Content:
+        S3Bucket: !Ref LayerBucket
+        S3Key: burst-detector-layer.zip
+
+  LayerBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+
+  # --- Lambda Function ---
+  BurstDetectorRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: S3ReadAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:ListBucket
+                Resource:
+                  - !Sub 'arn:aws:s3:::${PhotoBucketName}'
+                  - !Sub 'arn:aws:s3:::${PhotoBucketName}/*'
+
+  BurstDetectorFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: burst-detector
+      Runtime: python3.12
+      Handler: lambda_function.handler
+      Timeout: 300
+      MemorySize: 1024
+      Role: !GetAtt BurstDetectorRole.Arn
+      Layers:
+        - !Ref DepsLayer
+      Code:
+        ZipFile: |
+          # Placeholder - replaced by deploy.sh with actual code
+          def handler(event, context):
+              return {'statusCode': 200, 'body': '{}'}
+
+  # --- API Gateway ---
+  BurstApi:
+    Type: AWS::ApiGatewayV2::Api
+    Properties:
+      Name: burst-detector-api
+      ProtocolType: HTTP
+      CorsConfiguration:
+        AllowOrigins: ['*']
+        AllowMethods: [POST, OPTIONS]
+        AllowHeaders: ['*']
+
+  BurstApiIntegration:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref BurstApi
+      IntegrationType: AWS_PROXY
+      IntegrationUri: !GetAtt BurstDetectorFunction.Arn
+      PayloadFormatVersion: '2.0'
+
+  BurstApiRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref BurstApi
+      RouteKey: POST /scan
+      Target: !Sub 'integrations/${BurstApiIntegration}'
+
+  BurstApiStage:
+    Type: AWS::ApiGatewayV2::Stage
+    Properties:
+      ApiId: !Ref BurstApi
+      StageName: '$default'
+      AutoDeploy: true
+
+  LambdaApiPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref BurstDetectorFunction
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub 'arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${BurstApi}/*'
+
+Outputs:
+  BurstApiUrl:
+    Value: !Sub 'https://${BurstApi}.execute-api.${AWS::Region}.amazonaws.com/scan'
+  LayerBucket:
+    Value: !Ref LayerBucket
