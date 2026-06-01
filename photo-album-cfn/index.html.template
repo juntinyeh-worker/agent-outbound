@@ -67,6 +67,10 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; b
 </div>
 
 <div class="breadcrumb" id="breadcrumb"></div>
+<div id="bucketSelector" style="padding:8px 24px;border-bottom:1px solid #0f3460;display:none">
+  <label style="font-size:12px;color:#888;margin-right:8px">Bucket:</label>
+  <select id="bucketSelect" onchange="switchBucket(this.value)" style="padding:4px 8px;border-radius:4px;border:1px solid #0f3460;background:#1a1a2e;color:#eee;font-size:13px"></select>
+</div>
 <div id="burstBtnContainer" style="padding:12px 24px;display:none">
   <button id="scanBurstBtn" onclick="scanBursts()" style="padding:8px 16px;background:#e94560;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:13px">🔍 Scan for Burst Photos</button>
   <button id="genThumbBtn" onclick="generateThumbnails()" style="padding:8px 16px;background:#4ea8de;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:13px;margin-left:8px">🖼 Generate Thumbnails</button>
@@ -114,11 +118,13 @@ const CONFIG = {
   userPoolId: '%%USER_POOL_ID%%',
   clientId: '%%CLIENT_ID%%',
   identityPoolId: '%%IDENTITY_POOL_ID%%',
-  photoBucket: '%%PHOTO_BUCKET%%',
+  photoBuckets: '%%PHOTO_BUCKET%%'.split(',').map(b => b.trim()).filter(Boolean),
   burstApiUrl: '%%BURST_API_URL%%',
   rotateApiUrl: '%%ROTATE_API_URL%%',
   thumbnailApiUrl: '%%THUMBNAIL_API_URL%%'
 };
+
+let currentBucket = currentBuckets[0];
 
 let currentPath = '';
 let userSession = null;
@@ -190,8 +196,23 @@ function setupAWS(session) {
 
   AWS.config.credentials.refresh((err) => {
     if (err) { console.error(err); return; }
+    initBucketSelector();
     listObjects('');
   });
+}
+
+function initBucketSelector() {
+  if (CONFIG.photoBuckets.length > 1) {
+    const sel = document.getElementById('bucketSelect');
+    sel.innerHTML = CONFIG.photoBuckets.map(b => `<option value="${b}">${b}</option>`).join('');
+    sel.value = currentBucket;
+    document.getElementById('bucketSelector').style.display = 'block';
+  }
+}
+
+function switchBucket(bucket) {
+  currentBucket = bucket;
+  listObjects('');
 }
 
 function listObjects(prefix) {
@@ -203,7 +224,7 @@ function listObjects(prefix) {
   document.getElementById('burstStatus').textContent = '';
   const s3 = new AWS.S3();
   s3.listObjectsV2({
-    Bucket: CONFIG.photoBucket,
+    Bucket: currentBucket,
     Prefix: prefix,
     Delimiter: '/'
   }, (err, data) => {
@@ -214,7 +235,7 @@ function listObjects(prefix) {
 
 function updateBreadcrumb() {
   const parts = currentPath.split('/').filter(Boolean);
-  let html = `<a onclick="listObjects('')">${CONFIG.photoBucket}</a>`;
+  let html = `<a onclick="listObjects('')">${currentBucket}</a>`;
   let path = '';
   parts.forEach(p => {
     path += p + '/';
@@ -262,9 +283,9 @@ function renderGrid(data) {
     const s3 = new AWS.S3();
     const thumbKey = '.thumbnails/' + img.dataset.key;
     // Try thumbnail first, fall back to original
-    s3.headObject({ Bucket: CONFIG.photoBucket, Key: thumbKey }, (err) => {
+    s3.headObject({ Bucket: currentBucket, Key: thumbKey }, (err) => {
       const key = err ? img.dataset.key : thumbKey;
-      s3.getSignedUrl('getObject', { Bucket: CONFIG.photoBucket, Key: key, Expires: 300 }, (err, url) => {
+      s3.getSignedUrl('getObject', { Bucket: currentBucket, Key: key, Expires: 300 }, (err, url) => {
         if (!err) img.src = url;
       });
     });
@@ -280,7 +301,7 @@ function openPhoto(key) {
   document.getElementById('commentInput').value = '';
   loadComment(key);
   const s3 = new AWS.S3();
-  s3.getSignedUrl('getObject', { Bucket: CONFIG.photoBucket, Key: key, Expires: 300 }, (err, url) => {
+  s3.getSignedUrl('getObject', { Bucket: currentBucket, Key: key, Expires: 300 }, (err, url) => {
     if (!err) document.getElementById('lightboxImg').src = url;
   });
 }
@@ -293,7 +314,7 @@ function closeLightbox() {
 function purgePhoto() {
   if (!confirm('Permanently delete this photo?')) return;
   const s3 = new AWS.S3();
-  s3.deleteObject({ Bucket: CONFIG.photoBucket, Key: currentPhotoKey }, (err) => {
+  s3.deleteObject({ Bucket: currentBucket, Key: currentPhotoKey }, (err) => {
     if (err) { alert('Delete failed: ' + err.message); return; }
     closeLightbox();
     listObjects(currentPath);
@@ -319,7 +340,7 @@ function scanBursts() {
   fetch(BURST_API, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ bucket: CONFIG.photoBucket, prefix: currentPath })
+    body: JSON.stringify({ bucket: currentBucket, prefix: currentPath })
   })
   .then(r => r.json())
   .then(data => {
@@ -372,7 +393,7 @@ function renderBurstPanel(data) {
   // Load burst thumbnails
   document.querySelectorAll('[data-burst-key]').forEach(img => {
     const s3 = new AWS.S3();
-    s3.getSignedUrl('getObject', { Bucket: CONFIG.photoBucket, Key: img.dataset.burstKey, Expires: 300 }, (err, url) => {
+    s3.getSignedUrl('getObject', { Bucket: currentBucket, Key: img.dataset.burstKey, Expires: 300 }, (err, url) => {
       if (!err) img.src = url;
     });
   });
@@ -402,7 +423,7 @@ function deleteUnselected() {
   const s3 = new AWS.S3();
   let deleted = 0;
   toDelete.forEach(key => {
-    s3.deleteObject({ Bucket: CONFIG.photoBucket, Key: key }, (err) => {
+    s3.deleteObject({ Bucket: currentBucket, Key: key }, (err) => {
       deleted++;
       if (deleted === toDelete.length) {
         alert(`Deleted ${toDelete.length} photos.`);
@@ -424,13 +445,13 @@ function rotatePhoto(direction) {
   fetch(CONFIG.rotateApiUrl, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ bucket: CONFIG.photoBucket, key: currentPhotoKey, direction: direction })
+    body: JSON.stringify({ bucket: currentBucket, key: currentPhotoKey, direction: direction })
   })
   .then(r => r.json())
   .then(() => {
     // Reload image with cache-bust
     const s3 = new AWS.S3();
-    s3.getSignedUrl('getObject', { Bucket: CONFIG.photoBucket, Key: currentPhotoKey, Expires: 300 }, (err, url) => {
+    s3.getSignedUrl('getObject', { Bucket: currentBucket, Key: currentPhotoKey, Expires: 300 }, (err, url) => {
       if (!err) document.getElementById('lightboxImg').src = url + '&t=' + Date.now();
     });
   })
@@ -444,7 +465,7 @@ function generateThumbnails() {
   fetch(CONFIG.thumbnailApiUrl, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ bucket: CONFIG.photoBucket, prefix: currentPath })
+    body: JSON.stringify({ bucket: currentBucket, prefix: currentPath })
   })
   .then(r => r.json())
   .then(data => {
@@ -461,7 +482,7 @@ const META_PREFIX = '.meta/';
 function loadComment(key) {
   const s3 = new AWS.S3();
   const metaKey = META_PREFIX + key + '.json';
-  s3.getObject({ Bucket: CONFIG.photoBucket, Key: metaKey }, (err, data) => {
+  s3.getObject({ Bucket: currentBucket, Key: metaKey }, (err, data) => {
     if (err) {
       document.getElementById('commentInput').value = '';
       return;
@@ -477,7 +498,7 @@ function saveComment() {
   const metaKey = META_PREFIX + currentPhotoKey + '.json';
   const meta = JSON.stringify({ comment: comment, updatedAt: new Date().toISOString() });
   s3.putObject({
-    Bucket: CONFIG.photoBucket,
+    Bucket: currentBucket,
     Key: metaKey,
     Body: meta,
     ContentType: 'application/json'

@@ -4,7 +4,7 @@ Description: S3 Photo Album - CloudFront + Cognito + existing photo bucket
 Parameters:
   PhotoBucketName:
     Type: String
-    Description: Name of your S3 bucket for photos (will be created if it doesn't exist)
+    Description: Comma-separated list of S3 bucket names for photos (e.g. bucket1,bucket2)
   AdminEmail:
     Type: String
     Description: Admin email (will receive temporary password)
@@ -12,7 +12,7 @@ Parameters:
     Type: String
     Default: 'false'
     AllowedValues: ['true', 'false']
-    Description: Whether to create the photo bucket
+    Description: Whether to create the first photo bucket
 
 Conditions:
   ShouldCreateBucket: !Equals [!Ref CreatePhotoBucket, 'true']
@@ -167,17 +167,6 @@ Resources:
                 cognito-identity.amazonaws.com:aud: !Ref IdentityPool
               ForAnyValue:StringLike:
                 cognito-identity.amazonaws.com:amr: authenticated
-      Policies:
-        - PolicyName: ViewerPolicy
-          PolicyDocument:
-            Version: '2012-10-17'
-            Statement:
-              - Effect: Allow
-                Action: s3:ListBucket
-                Resource: !Sub 'arn:aws:s3:::${PhotoBucketName}'
-              - Effect: Allow
-                Action: s3:GetObject
-                Resource: !Sub 'arn:aws:s3:::${PhotoBucketName}/*'
 
   EditorRole:
     Type: AWS::IAM::Role
@@ -194,20 +183,86 @@ Resources:
                 cognito-identity.amazonaws.com:aud: !Ref IdentityPool
               ForAnyValue:StringLike:
                 cognito-identity.amazonaws.com:amr: authenticated
+
+  # --- Multi-bucket IAM Policy (set via custom resource) ---
+  BucketPolicyRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
       Policies:
-        - PolicyName: EditorPolicy
+        - PolicyName: IAMPolicyManagement
           PolicyDocument:
             Version: '2012-10-17'
             Statement:
               - Effect: Allow
-                Action: s3:ListBucket
-                Resource: !Sub 'arn:aws:s3:::${PhotoBucketName}'
-              - Effect: Allow
                 Action:
-                  - s3:GetObject
-                  - s3:PutObject
-                  - s3:DeleteObject
-                Resource: !Sub 'arn:aws:s3:::${PhotoBucketName}/*'
+                  - iam:PutRolePolicy
+                  - iam:DeleteRolePolicy
+                Resource:
+                  - !GetAtt ViewerRole.Arn
+                  - !GetAtt EditorRole.Arn
+
+  BucketPolicyFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      Runtime: nodejs20.x
+      Handler: index.handler
+      Timeout: 30
+      Role: !GetAtt BucketPolicyRole.Arn
+      Code:
+        ZipFile: |
+          const { IAMClient, PutRolePolicyCommand, DeleteRolePolicyCommand } = require('@aws-sdk/client-iam');
+          const response = require('cfn-response');
+          const iam = new IAMClient();
+          exports.handler = async (event, context) => {
+            const { VIEWER_ROLE, EDITOR_ROLE, BUCKETS } = event.ResourceProperties;
+            const bucketList = BUCKETS.split(',').map(b => b.trim()).filter(Boolean);
+            try {
+              if (event.RequestType === 'Delete') {
+                await iam.send(new DeleteRolePolicyCommand({ RoleName: VIEWER_ROLE, PolicyName: 'BucketAccess' })).catch(() => {});
+                await iam.send(new DeleteRolePolicyCommand({ RoleName: EDITOR_ROLE, PolicyName: 'BucketAccess' })).catch(() => {});
+                await response.send(event, context, response.SUCCESS, {});
+                return;
+              }
+              const bucketArns = bucketList.map(b => `arn:aws:s3:::${b}`);
+              const objectArns = bucketList.map(b => `arn:aws:s3:::${b}/*`);
+              const viewerPolicy = JSON.stringify({
+                Version: '2012-10-17',
+                Statement: [
+                  { Effect: 'Allow', Action: 's3:ListBucket', Resource: bucketArns },
+                  { Effect: 'Allow', Action: 's3:GetObject', Resource: objectArns }
+                ]
+              });
+              const editorPolicy = JSON.stringify({
+                Version: '2012-10-17',
+                Statement: [
+                  { Effect: 'Allow', Action: 's3:ListBucket', Resource: bucketArns },
+                  { Effect: 'Allow', Action: ['s3:GetObject', 's3:PutObject', 's3:DeleteObject'], Resource: objectArns }
+                ]
+              });
+              await iam.send(new PutRolePolicyCommand({ RoleName: VIEWER_ROLE, PolicyName: 'BucketAccess', PolicyDocument: viewerPolicy }));
+              await iam.send(new PutRolePolicyCommand({ RoleName: EDITOR_ROLE, PolicyName: 'BucketAccess', PolicyDocument: editorPolicy }));
+              await response.send(event, context, response.SUCCESS, {});
+            } catch (e) {
+              await response.send(event, context, response.FAILED, { Error: e.message });
+            }
+          };
+
+  SetBucketPolicies:
+    Type: Custom::BucketPolicies
+    Properties:
+      ServiceToken: !GetAtt BucketPolicyFunction.Arn
+      VIEWER_ROLE: !Ref ViewerRole
+      EDITOR_ROLE: !Ref EditorRole
+      BUCKETS: !Ref PhotoBucketName
 
   # --- Identity Pool Role Attachment ---
   RoleAttachment:
@@ -293,7 +348,7 @@ Resources:
       EMAIL: !Ref AdminEmail
       GROUP_NAME: Editors
 
-  # --- Set CORS on existing photo bucket ---
+  # --- Set CORS on existing photo bucket(s) ---
   BucketCorsRole:
     Type: AWS::IAM::Role
     Condition: UseExistingBucket
@@ -316,7 +371,7 @@ Resources:
                 Action:
                   - s3:PutBucketCors
                   - s3:GetBucketCors
-                Resource: !Sub 'arn:aws:s3:::${PhotoBucketName}'
+                Resource: 'arn:aws:s3:::*'
 
   BucketCorsFunction:
     Type: AWS::Lambda::Function
@@ -337,17 +392,20 @@ Resources:
               return;
             }
             try {
-              await s3.send(new PutBucketCorsCommand({
-                Bucket: event.ResourceProperties.BUCKET,
-                CORSConfiguration: {
-                  CORSRules: [{
-                    AllowedOrigins: ['*'],
-                    AllowedMethods: ['GET', 'PUT', 'DELETE', 'HEAD'],
-                    AllowedHeaders: ['*'],
-                    MaxAgeSeconds: 3600
-                  }]
-                }
-              }));
+              const buckets = event.ResourceProperties.BUCKETS.split(',').map(b => b.trim()).filter(Boolean);
+              for (const bucket of buckets) {
+                await s3.send(new PutBucketCorsCommand({
+                  Bucket: bucket,
+                  CORSConfiguration: {
+                    CORSRules: [{
+                      AllowedOrigins: ['*'],
+                      AllowedMethods: ['GET', 'PUT', 'DELETE', 'HEAD'],
+                      AllowedHeaders: ['*'],
+                      MaxAgeSeconds: 3600
+                    }]
+                  }
+                }));
+              }
               await response.send(event, context, response.SUCCESS, {});
             } catch (e) {
               await response.send(event, context, response.FAILED, { Error: e.message });
@@ -359,7 +417,7 @@ Resources:
     Condition: UseExistingBucket
     Properties:
       ServiceToken: !GetAtt BucketCorsFunction.Arn
-      BUCKET: !Ref PhotoBucketName
+      BUCKETS: !Ref PhotoBucketName
 
 Outputs:
   CloudFrontURL:
@@ -372,5 +430,6 @@ Outputs:
     Value: !Ref IdentityPool
   PhotoBucket:
     Value: !Ref PhotoBucketName
+    Description: Comma-separated list of photo buckets
   SiteBucket:
     Value: !Ref SiteBucket

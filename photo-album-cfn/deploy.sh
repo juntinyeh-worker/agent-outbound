@@ -17,18 +17,19 @@ echo "✓ AWS CLI found"
 read -p "AWS Region [us-east-1]: " REGION
 REGION=${REGION:-us-east-1}
 
-read -p "Photo S3 bucket name: " PHOTO_BUCKET
+read -p "Photo S3 bucket name(s) [comma-separated]: " PHOTO_BUCKET
 if [ -z "$PHOTO_BUCKET" ]; then
   echo "ERROR: Photo bucket name is required."
   exit 1
 fi
 
-# Check if bucket exists
+# Check if first bucket exists (for create logic)
+FIRST_BUCKET=$(echo "$PHOTO_BUCKET" | cut -d',' -f1 | tr -d ' ')
 CREATE_BUCKET="false"
-if aws s3api head-bucket --bucket "$PHOTO_BUCKET" --region "$REGION" 2>/dev/null; then
-  echo "✓ Bucket '$PHOTO_BUCKET' exists"
+if aws s3api head-bucket --bucket "$FIRST_BUCKET" --region "$REGION" 2>/dev/null; then
+  echo "✓ Bucket '$FIRST_BUCKET' exists"
 else
-  read -p "Bucket '$PHOTO_BUCKET' doesn't exist. Create it? [Y/n]: " CREATE_CONFIRM
+  read -p "Bucket '$FIRST_BUCKET' doesn't exist. Create it? [Y/n]: " CREATE_CONFIRM
   CREATE_CONFIRM=${CREATE_CONFIRM:-Y}
   if [[ "$CREATE_CONFIRM" =~ ^[Yy]$ ]]; then
     CREATE_BUCKET="true"
