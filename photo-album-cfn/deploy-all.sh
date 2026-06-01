@@ -157,10 +157,48 @@ rm -rf "$BURST_LAYER_DIR" "$BURST_CODE_DIR"
 echo "✓ Burst detector deployed"
 
 # =========================================
-# STEP 4: Collect all outputs
+# STEP 4: Thumbnail Generator Stack
 # =========================================
 echo ""
-echo "→ [4/5] Collecting stack outputs..."
+echo "→ [4/6] Deploying thumbnail generator stack..."
+
+THUMB_LAYER_DIR=$(mktemp -d)
+pip3 install Pillow -t "$THUMB_LAYER_DIR/python" --quiet --platform manylinux2014_x86_64 --only-binary=:all: 2>/dev/null
+cd "$THUMB_LAYER_DIR" && zip -r9 thumbnail-layer.zip python/ > /dev/null
+
+aws cloudformation deploy \
+  --stack-name thumbnail-generator \
+  --template-file "$SCRIPT_DIR/thumbnail/thumbnail-cfn.yaml" \
+  --parameter-overrides PhotoBucketName="$PHOTO_BUCKET" \
+  --capabilities CAPABILITY_IAM \
+  --region "$REGION"
+
+THUMB_LAYER_BUCKET=$(aws cloudformation describe-stacks \
+  --stack-name thumbnail-generator --region "$REGION" \
+  --query "Stacks[0].Outputs[?OutputKey=='ThumbnailLayerBucket'].OutputValue" --output text)
+
+aws s3 cp "$THUMB_LAYER_DIR/thumbnail-layer.zip" "s3://$THUMB_LAYER_BUCKET/thumbnail-layer.zip" --region "$REGION" --quiet
+
+THUMB_CODE_DIR=$(mktemp -d)
+cp "$SCRIPT_DIR/thumbnail/lambda_function.py" "$THUMB_CODE_DIR/"
+cd "$THUMB_CODE_DIR" && zip -r9 code.zip lambda_function.py > /dev/null
+aws lambda update-function-code --function-name thumbnail-generator --zip-file "fileb://code.zip" --region "$REGION" > /dev/null
+
+THUMB_LAYER_ARN=$(aws lambda publish-layer-version \
+  --layer-name thumbnail-pillow \
+  --content S3Bucket="$THUMB_LAYER_BUCKET",S3Key=thumbnail-layer.zip \
+  --compatible-runtimes python3.12 \
+  --region "$REGION" --query 'LayerVersionArn' --output text)
+aws lambda update-function-configuration --function-name thumbnail-generator --layers "$THUMB_LAYER_ARN" --region "$REGION" > /dev/null
+
+rm -rf "$THUMB_LAYER_DIR" "$THUMB_CODE_DIR"
+echo "✓ Thumbnail generator deployed"
+
+# =========================================
+# STEP 5: Collect all outputs
+# =========================================
+echo ""
+echo "→ [5/6] Collecting stack outputs..."
 
 get_output() {
   aws cloudformation describe-stacks --stack-name "$1" --region "$REGION" \
@@ -174,18 +212,20 @@ IDENTITY_POOL_ID=$(get_output photo-album IdentityPoolId)
 SITE_BUCKET=$(get_output photo-album SiteBucket)
 ROTATE_API_URL=$(get_output photo-rotate RotateApiUrl)
 BURST_API_URL=$(get_output burst-detector BurstApiUrl)
+THUMBNAIL_API_URL=$(get_output thumbnail-generator ThumbnailApiUrl)
 
-echo "  CloudFront:    $CLOUDFRONT_URL"
-echo "  UserPool:      $USER_POOL_ID"
-echo "  IdentityPool:  $IDENTITY_POOL_ID"
-echo "  Rotate API:    $ROTATE_API_URL"
-echo "  Burst API:     $BURST_API_URL"
+echo "  CloudFront:      $CLOUDFRONT_URL"
+echo "  UserPool:        $USER_POOL_ID"
+echo "  IdentityPool:    $IDENTITY_POOL_ID"
+echo "  Rotate API:      $ROTATE_API_URL"
+echo "  Burst API:       $BURST_API_URL"
+echo "  Thumbnail API:   $THUMBNAIL_API_URL"
 
 # =========================================
-# STEP 5: Generate & upload frontend
+# STEP 6: Generate & upload frontend
 # =========================================
 echo ""
-echo "→ [5/5] Generating frontend and uploading..."
+echo "→ [6/6] Generating frontend and uploading..."
 
 cp "$SCRIPT_DIR/index.html.template" /tmp/index.html
 
@@ -196,6 +236,7 @@ sed -i "s|%%IDENTITY_POOL_ID%%|$IDENTITY_POOL_ID|g" /tmp/index.html
 sed -i "s|%%PHOTO_BUCKET%%|$PHOTO_BUCKET|g" /tmp/index.html
 sed -i "s|%%BURST_API_URL%%|$BURST_API_URL|g" /tmp/index.html
 sed -i "s|%%ROTATE_API_URL%%|$ROTATE_API_URL|g" /tmp/index.html
+sed -i "s|%%THUMBNAIL_API_URL%%|$THUMBNAIL_API_URL|g" /tmp/index.html
 
 aws s3 cp /tmp/index.html "s3://$SITE_BUCKET/index.html" \
   --content-type "text/html" --region "$REGION" --quiet
@@ -213,6 +254,7 @@ echo " URL:  $CLOUDFRONT_URL"
 echo ""
 echo " Features deployed:"
 echo "   ✓ Photo album (browse, upload, delete)"
+echo "   ✓ Thumbnails (auto-generate on upload + manual batch)"
 echo "   ✓ Rotate (clockwise/counter-clockwise)"
 echo "   ✓ Comments (S3 sidecar JSON)"
 echo "   ✓ Burst detection (scan & deduplicate)"

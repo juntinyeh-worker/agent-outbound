@@ -1,0 +1,207 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Thumbnail Generator - S3 trigger + API Gateway manual trigger
+
+Parameters:
+  PhotoBucketName:
+    Type: String
+    Description: Existing photo S3 bucket name
+
+Resources:
+  ThumbnailRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: S3Access
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:HeadObject
+                  - s3:ListBucket
+                Resource:
+                  - !Sub 'arn:aws:s3:::${PhotoBucketName}'
+                  - !Sub 'arn:aws:s3:::${PhotoBucketName}/*'
+
+  ThumbnailLayerBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+
+  ThumbnailLayer:
+    Type: AWS::Lambda::LayerVersion
+    Properties:
+      LayerName: thumbnail-pillow
+      CompatibleRuntimes: [python3.12]
+      Content:
+        S3Bucket: !Ref ThumbnailLayerBucket
+        S3Key: thumbnail-layer.zip
+
+  ThumbnailFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: thumbnail-generator
+      Runtime: python3.12
+      Handler: lambda_function.handler
+      Timeout: 300
+      MemorySize: 1024
+      Role: !GetAtt ThumbnailRole.Arn
+      Layers:
+        - !Ref ThumbnailLayer
+      Code:
+        ZipFile: |
+          def handler(event, context):
+              return {'statusCode': 200, 'body': '{}'}
+
+  # --- S3 Event Notification (auto-trigger on upload) ---
+  S3InvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref ThumbnailFunction
+      Action: lambda:InvokeFunction
+      Principal: s3.amazonaws.com
+      SourceArn: !Sub 'arn:aws:s3:::${PhotoBucketName}'
+      SourceAccount: !Ref AWS::AccountId
+
+  # Custom resource to add S3 notification to existing bucket
+  NotificationRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: S3Notification
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:PutBucketNotification
+                  - s3:GetBucketNotification
+                Resource: !Sub 'arn:aws:s3:::${PhotoBucketName}'
+
+  NotificationFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      Runtime: nodejs20.x
+      Handler: index.handler
+      Timeout: 30
+      Role: !GetAtt NotificationRole.Arn
+      Code:
+        ZipFile: |
+          const { S3Client, PutBucketNotificationConfigurationCommand, GetBucketNotificationConfigurationCommand } = require('@aws-sdk/client-s3');
+          const response = require('cfn-response');
+          const s3 = new S3Client();
+          exports.handler = async (event, context) => {
+            const bucket = event.ResourceProperties.BUCKET;
+            const lambdaArn = event.ResourceProperties.LAMBDA_ARN;
+            try {
+              if (event.RequestType === 'Delete') {
+                await s3.send(new PutBucketNotificationConfigurationCommand({
+                  Bucket: bucket,
+                  NotificationConfiguration: {}
+                }));
+                await response.send(event, context, response.SUCCESS, {});
+                return;
+              }
+              const existing = await s3.send(new GetBucketNotificationConfigurationCommand({ Bucket: bucket }));
+              const configs = existing.LambdaFunctionConfigurations || [];
+              configs.push({
+                LambdaFunctionArn: lambdaArn,
+                Events: ['s3:ObjectCreated:*'],
+                Filter: { Key: { FilterRules: [
+                  { Name: 'prefix', Value: '' },
+                  { Name: 'suffix', Value: '' }
+                ]}}
+              });
+              await s3.send(new PutBucketNotificationConfigurationCommand({
+                Bucket: bucket,
+                NotificationConfiguration: {
+                  LambdaFunctionConfigurations: configs.filter(c =>
+                    !c.LambdaFunctionArn || c.LambdaFunctionArn !== lambdaArn || c === configs[configs.length - 1]
+                  ),
+                  TopicConfigurations: existing.TopicConfigurations || [],
+                  QueueConfigurations: existing.QueueConfigurations || []
+                }
+              }));
+              await response.send(event, context, response.SUCCESS, {});
+            } catch (e) {
+              await response.send(event, context, response.FAILED, { Error: e.message });
+            }
+          };
+
+  SetNotification:
+    Type: Custom::S3Notification
+    DependsOn: S3InvokePermission
+    Properties:
+      ServiceToken: !GetAtt NotificationFunction.Arn
+      BUCKET: !Ref PhotoBucketName
+      LAMBDA_ARN: !GetAtt ThumbnailFunction.Arn
+
+  # --- API Gateway (manual trigger) ---
+  ThumbnailApi:
+    Type: AWS::ApiGatewayV2::Api
+    Properties:
+      Name: thumbnail-generator-api
+      ProtocolType: HTTP
+      CorsConfiguration:
+        AllowOrigins: ['*']
+        AllowMethods: [POST, OPTIONS]
+        AllowHeaders: ['*']
+
+  ThumbnailIntegration:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref ThumbnailApi
+      IntegrationType: AWS_PROXY
+      IntegrationUri: !GetAtt ThumbnailFunction.Arn
+      PayloadFormatVersion: '2.0'
+
+  ThumbnailRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref ThumbnailApi
+      RouteKey: POST /generate
+      Target: !Sub 'integrations/${ThumbnailIntegration}'
+
+  ThumbnailStage:
+    Type: AWS::ApiGatewayV2::Stage
+    Properties:
+      ApiId: !Ref ThumbnailApi
+      StageName: '$default'
+      AutoDeploy: true
+
+  ApiInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref ThumbnailFunction
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub 'arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${ThumbnailApi}/*'
+
+Outputs:
+  ThumbnailApiUrl:
+    Value: !Sub 'https://${ThumbnailApi}.execute-api.${AWS::Region}.amazonaws.com/generate'
+  ThumbnailLayerBucket:
+    Value: !Ref ThumbnailLayerBucket
