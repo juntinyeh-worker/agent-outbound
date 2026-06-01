@@ -4,7 +4,7 @@ Description: Video Thumbnail Generator (MOV/MP4) - FFmpeg Lambda
 Parameters:
   PhotoBucketName:
     Type: String
-    Description: Photo/video S3 bucket name (first bucket if comma-separated)
+    Description: Comma-separated list of S3 bucket names
 
 Resources:
   VideoThumbRole:
@@ -30,9 +30,7 @@ Resources:
                   - s3:PutObject
                   - s3:HeadObject
                   - s3:ListBucket
-                Resource:
-                  - !Sub 'arn:aws:s3:::${PhotoBucketName}'
-                  - !Sub 'arn:aws:s3:::${PhotoBucketName}/*'
+                Resource: '*'
 
   VideoThumbFunction:
     Type: AWS::Lambda::Function
@@ -51,6 +49,24 @@ Resources:
         ZipFile: |
           def handler(event, context):
               return {'statusCode': 200, 'body': '{}'}
+
+  VideoThumbFunctionUrl:
+    Type: AWS::Lambda::Url
+    Properties:
+      AuthType: NONE
+      TargetFunctionArn: !Ref VideoThumbFunction
+      Cors:
+        AllowOrigins: ['*']
+        AllowMethods: [POST]
+        AllowHeaders: ['*']
+
+  VideoThumbUrlPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref VideoThumbFunction
+      Action: lambda:InvokeFunctionUrl
+      Principal: '*'
+      FunctionUrlAuthType: NONE
 
   FfmpegLayer:
     Type: AWS::Lambda::LayerVersion
@@ -164,49 +180,8 @@ Resources:
       BUCKET: !Ref PhotoBucketName
       LAMBDA_ARN: !GetAtt VideoThumbFunction.Arn
 
-  # --- API Gateway (manual trigger) ---
-  VideoThumbApi:
-    Type: AWS::ApiGatewayV2::Api
-    Properties:
-      Name: video-thumbnail-api
-      ProtocolType: HTTP
-      CorsConfiguration:
-        AllowOrigins: ['*']
-        AllowMethods: [POST, OPTIONS]
-        AllowHeaders: ['*']
-
-  VideoThumbIntegration:
-    Type: AWS::ApiGatewayV2::Integration
-    Properties:
-      ApiId: !Ref VideoThumbApi
-      IntegrationType: AWS_PROXY
-      IntegrationUri: !GetAtt VideoThumbFunction.Arn
-      PayloadFormatVersion: '2.0'
-
-  VideoThumbRoute:
-    Type: AWS::ApiGatewayV2::Route
-    Properties:
-      ApiId: !Ref VideoThumbApi
-      RouteKey: POST /generate
-      Target: !Sub 'integrations/${VideoThumbIntegration}'
-
-  VideoThumbStage:
-    Type: AWS::ApiGatewayV2::Stage
-    Properties:
-      ApiId: !Ref VideoThumbApi
-      StageName: '$default'
-      AutoDeploy: true
-
-  ApiPermission:
-    Type: AWS::Lambda::Permission
-    Properties:
-      FunctionName: !Ref VideoThumbFunction
-      Action: lambda:InvokeFunction
-      Principal: apigateway.amazonaws.com
-      SourceArn: !Sub 'arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${VideoThumbApi}/*'
-
 Outputs:
   VideoThumbApiUrl:
-    Value: !Sub 'https://${VideoThumbApi}.execute-api.${AWS::Region}.amazonaws.com/generate'
+    Value: !GetAtt VideoThumbFunctionUrl.FunctionUrl
   LayerBucket:
     Value: !Ref LayerBucket

@@ -30,9 +30,7 @@ Resources:
                   - s3:PutObject
                   - s3:HeadObject
                   - s3:ListBucket
-                Resource:
-                  - !Sub 'arn:aws:s3:::${PhotoBucketName}'
-                  - !Sub 'arn:aws:s3:::${PhotoBucketName}/*'
+                Resource: '*'
 
   ThumbnailLayerBucket:
     Type: AWS::S3::Bucket
@@ -159,49 +157,27 @@ Resources:
       BUCKET: !Ref PhotoBucketName
       LAMBDA_ARN: !GetAtt ThumbnailFunction.Arn
 
-  # --- API Gateway (manual trigger) ---
-  ThumbnailApi:
-    Type: AWS::ApiGatewayV2::Api
+  # --- Function URL (manual trigger) ---
+  ThumbnailFunctionUrl:
+    Type: AWS::Lambda::Url
     Properties:
-      Name: thumbnail-generator-api
-      ProtocolType: HTTP
-      CorsConfiguration:
+      AuthType: NONE
+      TargetFunctionArn: !Ref ThumbnailFunction
+      Cors:
         AllowOrigins: ['*']
-        AllowMethods: [POST, OPTIONS]
+        AllowMethods: [POST]
         AllowHeaders: ['*']
 
-  ThumbnailIntegration:
-    Type: AWS::ApiGatewayV2::Integration
-    Properties:
-      ApiId: !Ref ThumbnailApi
-      IntegrationType: AWS_PROXY
-      IntegrationUri: !GetAtt ThumbnailFunction.Arn
-      PayloadFormatVersion: '2.0'
-
-  ThumbnailRoute:
-    Type: AWS::ApiGatewayV2::Route
-    Properties:
-      ApiId: !Ref ThumbnailApi
-      RouteKey: POST /generate
-      Target: !Sub 'integrations/${ThumbnailIntegration}'
-
-  ThumbnailStage:
-    Type: AWS::ApiGatewayV2::Stage
-    Properties:
-      ApiId: !Ref ThumbnailApi
-      StageName: '$default'
-      AutoDeploy: true
-
-  ApiInvokePermission:
+  ThumbnailUrlPermission:
     Type: AWS::Lambda::Permission
     Properties:
       FunctionName: !Ref ThumbnailFunction
-      Action: lambda:InvokeFunction
-      Principal: apigateway.amazonaws.com
-      SourceArn: !Sub 'arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${ThumbnailApi}/*'
+      Action: lambda:InvokeFunctionUrl
+      Principal: '*'
+      FunctionUrlAuthType: NONE
 
 Outputs:
   ThumbnailApiUrl:
-    Value: !Sub 'https://${ThumbnailApi}.execute-api.${AWS::Region}.amazonaws.com/generate'
+    Value: !GetAtt ThumbnailFunctionUrl.FunctionUrl
   ThumbnailLayerBucket:
     Value: !Ref ThumbnailLayerBucket

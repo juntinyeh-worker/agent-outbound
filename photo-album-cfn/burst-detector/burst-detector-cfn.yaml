@@ -52,9 +52,7 @@ Resources:
                 Action:
                   - s3:GetObject
                   - s3:ListBucket
-                Resource:
-                  - !Sub 'arn:aws:s3:::${PhotoBucketName}'
-                  - !Sub 'arn:aws:s3:::${PhotoBucketName}/*'
+                Resource: '*'
 
   BurstDetectorFunction:
     Type: AWS::Lambda::Function
@@ -73,49 +71,27 @@ Resources:
           def handler(event, context):
               return {'statusCode': 200, 'body': '{}'}
 
-  # --- API Gateway ---
-  BurstApi:
-    Type: AWS::ApiGatewayV2::Api
+  # --- Function URL ---
+  BurstFunctionUrl:
+    Type: AWS::Lambda::Url
     Properties:
-      Name: burst-detector-api
-      ProtocolType: HTTP
-      CorsConfiguration:
+      AuthType: NONE
+      TargetFunctionArn: !Ref BurstDetectorFunction
+      Cors:
         AllowOrigins: ['*']
-        AllowMethods: [POST, OPTIONS]
+        AllowMethods: [POST]
         AllowHeaders: ['*']
 
-  BurstApiIntegration:
-    Type: AWS::ApiGatewayV2::Integration
-    Properties:
-      ApiId: !Ref BurstApi
-      IntegrationType: AWS_PROXY
-      IntegrationUri: !GetAtt BurstDetectorFunction.Arn
-      PayloadFormatVersion: '2.0'
-
-  BurstApiRoute:
-    Type: AWS::ApiGatewayV2::Route
-    Properties:
-      ApiId: !Ref BurstApi
-      RouteKey: POST /scan
-      Target: !Sub 'integrations/${BurstApiIntegration}'
-
-  BurstApiStage:
-    Type: AWS::ApiGatewayV2::Stage
-    Properties:
-      ApiId: !Ref BurstApi
-      StageName: '$default'
-      AutoDeploy: true
-
-  LambdaApiPermission:
+  BurstUrlPermission:
     Type: AWS::Lambda::Permission
     Properties:
       FunctionName: !Ref BurstDetectorFunction
-      Action: lambda:InvokeFunction
-      Principal: apigateway.amazonaws.com
-      SourceArn: !Sub 'arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${BurstApi}/*'
+      Action: lambda:InvokeFunctionUrl
+      Principal: '*'
+      FunctionUrlAuthType: NONE
 
 Outputs:
   BurstApiUrl:
-    Value: !Sub 'https://${BurstApi}.execute-api.${AWS::Region}.amazonaws.com/scan'
+    Value: !GetAtt BurstFunctionUrl.FunctionUrl
   LayerBucket:
     Value: !Ref LayerBucket

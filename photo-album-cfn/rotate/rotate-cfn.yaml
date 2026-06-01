@@ -28,7 +28,7 @@ Resources:
                 Action:
                   - s3:GetObject
                   - s3:PutObject
-                Resource: !Sub 'arn:aws:s3:::${PhotoBucketName}/*'
+                Resource: '*'
 
   RotateLayerBucket:
     Type: AWS::S3::Bucket
@@ -63,48 +63,26 @@ Resources:
           def handler(event, context):
               return {'statusCode': 200, 'body': '{}'}
 
-  RotateApi:
-    Type: AWS::ApiGatewayV2::Api
+  RotateFunctionUrl:
+    Type: AWS::Lambda::Url
     Properties:
-      Name: photo-rotate-api
-      ProtocolType: HTTP
-      CorsConfiguration:
+      AuthType: NONE
+      TargetFunctionArn: !Ref RotateFunction
+      Cors:
         AllowOrigins: ['*']
-        AllowMethods: [POST, OPTIONS]
+        AllowMethods: [POST]
         AllowHeaders: ['*']
 
-  RotateIntegration:
-    Type: AWS::ApiGatewayV2::Integration
-    Properties:
-      ApiId: !Ref RotateApi
-      IntegrationType: AWS_PROXY
-      IntegrationUri: !GetAtt RotateFunction.Arn
-      PayloadFormatVersion: '2.0'
-
-  RotateRoute:
-    Type: AWS::ApiGatewayV2::Route
-    Properties:
-      ApiId: !Ref RotateApi
-      RouteKey: POST /rotate
-      Target: !Sub 'integrations/${RotateIntegration}'
-
-  RotateStage:
-    Type: AWS::ApiGatewayV2::Stage
-    Properties:
-      ApiId: !Ref RotateApi
-      StageName: '$default'
-      AutoDeploy: true
-
-  RotatePermission:
+  RotateUrlPermission:
     Type: AWS::Lambda::Permission
     Properties:
       FunctionName: !Ref RotateFunction
-      Action: lambda:InvokeFunction
-      Principal: apigateway.amazonaws.com
-      SourceArn: !Sub 'arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${RotateApi}/*'
+      Action: lambda:InvokeFunctionUrl
+      Principal: '*'
+      FunctionUrlAuthType: NONE
 
 Outputs:
   RotateApiUrl:
-    Value: !Sub 'https://${RotateApi}.execute-api.${AWS::Region}.amazonaws.com/rotate'
+    Value: !GetAtt RotateFunctionUrl.FunctionUrl
   RotateLayerBucket:
     Value: !Ref RotateLayerBucket
