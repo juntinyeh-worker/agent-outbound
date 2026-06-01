@@ -263,6 +263,71 @@ Resources:
       EMAIL: !Ref AdminEmail
       GROUP_NAME: Editors
 
+  # --- Set CORS on existing photo bucket ---
+  BucketCorsRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: S3Cors
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:PutBucketCors
+                  - s3:GetBucketCors
+                Resource: !Sub 'arn:aws:s3:::${PhotoBucketName}'
+
+  BucketCorsFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      Runtime: nodejs20.x
+      Handler: index.handler
+      Timeout: 30
+      Role: !GetAtt BucketCorsRole.Arn
+      Code:
+        ZipFile: |
+          const { S3Client, PutBucketCorsCommand } = require('@aws-sdk/client-s3');
+          const response = require('cfn-response');
+          const s3 = new S3Client();
+          exports.handler = async (event, context) => {
+            if (event.RequestType === 'Delete') {
+              await response.send(event, context, response.SUCCESS, {});
+              return;
+            }
+            try {
+              await s3.send(new PutBucketCorsCommand({
+                Bucket: event.ResourceProperties.BUCKET,
+                CORSConfiguration: {
+                  CORSRules: [{
+                    AllowedOrigins: ['*'],
+                    AllowedMethods: ['GET', 'PUT', 'DELETE', 'HEAD'],
+                    AllowedHeaders: ['*'],
+                    MaxAgeSeconds: 3600
+                  }]
+                }
+              }));
+              await response.send(event, context, response.SUCCESS, {});
+            } catch (e) {
+              await response.send(event, context, response.FAILED, { Error: e.message });
+            }
+          };
+
+  SetBucketCors:
+    Type: Custom::BucketCors
+    Properties:
+      ServiceToken: !GetAtt BucketCorsFunction.Arn
+      BUCKET: !Ref PhotoBucketName
+
 Outputs:
   CloudFrontURL:
     Value: !Sub 'https://${Distribution.DomainName}'
