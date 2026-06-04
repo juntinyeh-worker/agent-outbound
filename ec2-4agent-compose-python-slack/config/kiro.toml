@@ -1,0 +1,14 @@
+${PLATFORM_BLOCK_KIRO}
+
+[agent]
+command = "kiro-cli"
+args = ["acp", "--trust-all-tools"]
+working_dir = "/home/agent"
+
+[pool]
+max_sessions = 10
+session_ttl_hours = 24
+
+[reactions]
+enabled = true
+remove_after_reply = false

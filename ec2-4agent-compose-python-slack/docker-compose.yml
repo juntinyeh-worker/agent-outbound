@@ -1,0 +1,98 @@
+# OpenAB 4-Agent Demo — Docker Compose (with Python runtime)
+# Builds custom images extending official OpenAB images with Python + apt
+# Run ./setup.sh for end-to-end setup, or: docker compose up -d
+
+services:
+  agent-kiro:
+    build:
+      context: .
+      args:
+        BASE_IMAGE: ghcr.io/openabdev/openab:latest
+        USERNAME: agent
+    image: openab-custom-kiro:latest
+    container_name: openab-kiro
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      - KIRO_API_KEY=${KIRO_API_KEY}
+      - GH_TOKEN=${GH_TOKEN:-}
+    volumes:
+      - kiro-home:/home/agent
+      - ./config/.rendered/kiro.toml:/etc/openab/config.toml:ro
+    healthcheck:
+      test: ["CMD", "pgrep", "-x", "openab"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  agent-claude:
+    build:
+      context: .
+      args:
+        BASE_IMAGE: ghcr.io/openabdev/openab-claude:latest
+        USERNAME: node
+    image: openab-custom-claude:latest
+    container_name: openab-claude
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - GH_TOKEN=${GH_TOKEN:-}
+    volumes:
+      - claude-home:/home/node
+      - ./config/.rendered/claude.toml:/etc/openab/config.toml:ro
+    healthcheck:
+      test: ["CMD", "pgrep", "-x", "openab"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  agent-gemini:
+    build:
+      context: .
+      args:
+        BASE_IMAGE: ghcr.io/openabdev/openab-gemini:latest
+        USERNAME: node
+    image: openab-custom-gemini:latest
+    container_name: openab-gemini
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - GH_TOKEN=${GH_TOKEN:-}
+    volumes:
+      - gemini-home:/home/node
+      - ./config/.rendered/gemini.toml:/etc/openab/config.toml:ro
+    healthcheck:
+      test: ["CMD", "pgrep", "-x", "openab"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  agent-codex:
+    build:
+      context: .
+      args:
+        BASE_IMAGE: ghcr.io/openabdev/openab-codex:latest
+        USERNAME: node
+    image: openab-custom-codex:latest
+    container_name: openab-codex
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - GH_TOKEN=${GH_TOKEN:-}
+    volumes:
+      - codex-home:/home/node
+      - ./config/.rendered/codex.toml:/etc/openab/config.toml:ro
+    healthcheck:
+      test: ["CMD", "pgrep", "-x", "openab"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+volumes:
+  kiro-home:
+  claude-home:
+  gemini-home:
+  codex-home:
