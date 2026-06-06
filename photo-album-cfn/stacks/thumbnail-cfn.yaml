@@ -4,6 +4,7 @@ Description: Thumbnail Generator - S3 trigger + Function URL (nested stack)
 Parameters:
   PhotoBucketName:
     Type: String
+    Description: Comma-separated list of S3 bucket names
 
 Resources:
   ThumbnailRole:
@@ -64,16 +65,16 @@ Resources:
           def handler(event, context):
               return {'statusCode': 200, 'body': '{}'}
 
-  # --- S3 Event Notification ---
+  # --- S3 invoke permission (allow any S3 bucket to trigger) ---
   S3InvokePermission:
     Type: AWS::Lambda::Permission
     Properties:
       FunctionName: !Ref ThumbnailFunction
       Action: lambda:InvokeFunction
       Principal: s3.amazonaws.com
-      SourceArn: !Sub 'arn:aws:s3:::${PhotoBucketName}'
       SourceAccount: !Ref AWS::AccountId
 
+  # --- Custom resource to set S3 notifications on ALL buckets ---
   NotificationRole:
     Type: AWS::IAM::Role
     Properties:
@@ -95,14 +96,14 @@ Resources:
                 Action:
                   - s3:PutBucketNotification
                   - s3:GetBucketNotification
-                Resource: !Sub 'arn:aws:s3:::${PhotoBucketName}'
+                Resource: 'arn:aws:s3:::*'
 
   NotificationFunction:
     Type: AWS::Lambda::Function
     Properties:
       Runtime: nodejs20.x
       Handler: index.handler
-      Timeout: 30
+      Timeout: 60
       Role: !GetAtt NotificationRole.Arn
       Code:
         ZipFile: |
@@ -110,31 +111,39 @@ Resources:
           const response = require('cfn-response');
           const s3 = new S3Client();
           exports.handler = async (event, context) => {
-            const bucket = event.ResourceProperties.BUCKET;
+            const buckets = event.ResourceProperties.BUCKETS.split(',').map(b => b.trim()).filter(Boolean);
             const lambdaArn = event.ResourceProperties.LAMBDA_ARN;
             try {
-              if (event.RequestType === 'Delete') {
-                await s3.send(new PutBucketNotificationConfigurationCommand({
-                  Bucket: bucket, NotificationConfiguration: {}
-                }));
-                await response.send(event, context, response.SUCCESS, {});
-                return;
-              }
-              const existing = await s3.send(new GetBucketNotificationConfigurationCommand({ Bucket: bucket }));
-              const configs = (existing.LambdaFunctionConfigurations || []).filter(c => c.LambdaFunctionArn !== lambdaArn);
-              configs.push({
-                LambdaFunctionArn: lambdaArn,
-                Events: ['s3:ObjectCreated:*'],
-                Filter: { Key: { FilterRules: [{ Name: 'prefix', Value: '' }, { Name: 'suffix', Value: '' }] }}
-              });
-              await s3.send(new PutBucketNotificationConfigurationCommand({
-                Bucket: bucket,
-                NotificationConfiguration: {
-                  LambdaFunctionConfigurations: configs,
-                  TopicConfigurations: existing.TopicConfigurations || [],
-                  QueueConfigurations: existing.QueueConfigurations || []
+              for (const bucket of buckets) {
+                if (event.RequestType === 'Delete') {
+                  const existing = await s3.send(new GetBucketNotificationConfigurationCommand({ Bucket: bucket }));
+                  const configs = (existing.LambdaFunctionConfigurations || []).filter(c => c.LambdaFunctionArn !== lambdaArn);
+                  await s3.send(new PutBucketNotificationConfigurationCommand({
+                    Bucket: bucket,
+                    NotificationConfiguration: {
+                      LambdaFunctionConfigurations: configs,
+                      TopicConfigurations: existing.TopicConfigurations || [],
+                      QueueConfigurations: existing.QueueConfigurations || []
+                    }
+                  }));
+                } else {
+                  const existing = await s3.send(new GetBucketNotificationConfigurationCommand({ Bucket: bucket }));
+                  const configs = (existing.LambdaFunctionConfigurations || []).filter(c => c.LambdaFunctionArn !== lambdaArn);
+                  configs.push({
+                    LambdaFunctionArn: lambdaArn,
+                    Events: ['s3:ObjectCreated:*'],
+                    Filter: { Key: { FilterRules: [{ Name: 'prefix', Value: '' }, { Name: 'suffix', Value: '' }] }}
+                  });
+                  await s3.send(new PutBucketNotificationConfigurationCommand({
+                    Bucket: bucket,
+                    NotificationConfiguration: {
+                      LambdaFunctionConfigurations: configs,
+                      TopicConfigurations: existing.TopicConfigurations || [],
+                      QueueConfigurations: existing.QueueConfigurations || []
+                    }
+                  }));
                 }
-              }));
+              }
               await response.send(event, context, response.SUCCESS, {});
             } catch (e) {
               await response.send(event, context, response.FAILED, { Error: e.message });
@@ -146,7 +155,7 @@ Resources:
     DependsOn: S3InvokePermission
     Properties:
       ServiceToken: !GetAtt NotificationFunction.Arn
-      BUCKET: !Ref PhotoBucketName
+      BUCKETS: !Ref PhotoBucketName
       LAMBDA_ARN: !GetAtt ThumbnailFunction.Arn
 
   # --- Function URL ---

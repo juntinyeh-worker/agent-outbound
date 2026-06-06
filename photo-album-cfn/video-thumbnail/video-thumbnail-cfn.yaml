@@ -135,9 +135,20 @@ Resources:
             const suffixes = ['.mov', '.mp4', '.avi', '.mkv', '.webm', '.m4v'];
             try {
               for (const bucket of buckets) {
-                const existing = await s3.send(new GetBucketNotificationConfigurationCommand({ Bucket: bucket }));
-                const configs = (existing.LambdaFunctionConfigurations || []).filter(c => c.LambdaFunctionArn !== lambdaArn);
-                if (event.RequestType !== 'Delete') {
+                if (event.RequestType === 'Delete') {
+                  const existing = await s3.send(new GetBucketNotificationConfigurationCommand({ Bucket: bucket }));
+                  const configs = (existing.LambdaFunctionConfigurations || []).filter(c => c.LambdaFunctionArn !== lambdaArn);
+                  await s3.send(new PutBucketNotificationConfigurationCommand({
+                    Bucket: bucket,
+                    NotificationConfiguration: {
+                      LambdaFunctionConfigurations: configs,
+                      TopicConfigurations: existing.TopicConfigurations || [],
+                      QueueConfigurations: existing.QueueConfigurations || []
+                    }
+                  }));
+                } else {
+                  const existing = await s3.send(new GetBucketNotificationConfigurationCommand({ Bucket: bucket }));
+                  const configs = (existing.LambdaFunctionConfigurations || []).filter(c => c.LambdaFunctionArn !== lambdaArn);
                   for (const suffix of suffixes) {
                     configs.push({
                       LambdaFunctionArn: lambdaArn,
@@ -145,15 +156,15 @@ Resources:
                       Filter: { Key: { FilterRules: [{ Name: 'suffix', Value: suffix }] }}
                     });
                   }
+                  await s3.send(new PutBucketNotificationConfigurationCommand({
+                    Bucket: bucket,
+                    NotificationConfiguration: {
+                      LambdaFunctionConfigurations: configs,
+                      TopicConfigurations: existing.TopicConfigurations || [],
+                      QueueConfigurations: existing.QueueConfigurations || []
+                    }
+                  }));
                 }
-                await s3.send(new PutBucketNotificationConfigurationCommand({
-                  Bucket: bucket,
-                  NotificationConfiguration: {
-                    LambdaFunctionConfigurations: configs,
-                    TopicConfigurations: existing.TopicConfigurations || [],
-                    QueueConfigurations: existing.QueueConfigurations || []
-                  }
-                }));
               }
               await response.send(event, context, response.SUCCESS, {});
             } catch (e) {
