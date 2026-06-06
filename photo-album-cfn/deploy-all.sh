@@ -108,7 +108,7 @@ echo ""
 echo "→ [4/5] Deploying parent stack..."
 aws cloudformation deploy \
   --stack-name "$STACK_NAME" \
-  --template-file "$SCRIPT_DIR/photo-album-parent.yaml" \
+  --template-file "$SCRIPT_DIR/photo-album-cfn.yaml" \
   --parameter-overrides \
     PhotoBucketName="$PHOTO_BUCKET" \
     AdminEmail="$ADMIN_EMAIL" \
