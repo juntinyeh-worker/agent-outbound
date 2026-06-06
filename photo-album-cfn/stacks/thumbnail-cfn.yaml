@@ -158,27 +158,72 @@ Resources:
       BUCKETS: !Ref PhotoBucketName
       LAMBDA_ARN: !GetAtt ThumbnailFunction.Arn
 
-  # --- Function URL ---
-  ThumbnailFunctionUrl:
-    Type: AWS::Lambda::Url
+  # --- API Gateway REST API (manual trigger) ---
+  ThumbnailApi:
+    Type: AWS::ApiGateway::RestApi
     Properties:
-      AuthType: NONE
-      TargetFunctionArn: !Ref ThumbnailFunction
-      Cors:
-        AllowOrigins: ['*']
-        AllowMethods: [POST]
-        AllowHeaders: ['*']
+      Name: thumbnail-generator-api
 
-  ThumbnailUrlPermission:
+  ThumbnailResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref ThumbnailApi
+      ParentId: !GetAtt ThumbnailApi.RootResourceId
+      PathPart: generate
+
+  ThumbnailMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref ThumbnailApi
+      ResourceId: !Ref ThumbnailResource
+      HttpMethod: POST
+      AuthorizationType: NONE
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub 'arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${ThumbnailFunction.Arn}/invocations'
+
+  ThumbnailOptionsMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref ThumbnailApi
+      ResourceId: !Ref ThumbnailResource
+      HttpMethod: OPTIONS
+      AuthorizationType: NONE
+      Integration:
+        Type: MOCK
+        RequestTemplates:
+          application/json: '{"statusCode": 200}'
+        IntegrationResponses:
+          - StatusCode: 200
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Headers: "'*'"
+              method.response.header.Access-Control-Allow-Methods: "'POST,OPTIONS'"
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+      MethodResponses:
+        - StatusCode: 200
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Headers: true
+            method.response.header.Access-Control-Allow-Methods: true
+            method.response.header.Access-Control-Allow-Origin: true
+
+  ThumbnailDeployment:
+    Type: AWS::ApiGateway::Deployment
+    DependsOn: [ThumbnailMethod, ThumbnailOptionsMethod]
+    Properties:
+      RestApiId: !Ref ThumbnailApi
+      StageName: prod
+
+  ThumbnailApiPermission:
     Type: AWS::Lambda::Permission
     Properties:
       FunctionName: !Ref ThumbnailFunction
-      Action: lambda:InvokeFunctionUrl
-      Principal: '*'
-      FunctionUrlAuthType: NONE
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub 'arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${ThumbnailApi}/*'
 
 Outputs:
   ThumbnailApiUrl:
-    Value: !GetAtt ThumbnailFunctionUrl.FunctionUrl
+    Value: !Sub 'https://${ThumbnailApi}.execute-api.${AWS::Region}.amazonaws.com/prod/generate'
   ThumbnailLayerBucket:
     Value: !Ref ThumbnailLayerBucket

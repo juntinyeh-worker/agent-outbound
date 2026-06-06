@@ -67,23 +67,69 @@ Resources:
           def handler(event, context):
               return {'statusCode': 200, 'body': '{}'}
 
-  VideoThumbFunctionUrl:
-    Type: AWS::Lambda::Url
+  # --- API Gateway REST API ---
+  VideoThumbApi:
+    Type: AWS::ApiGateway::RestApi
     Properties:
-      AuthType: NONE
-      TargetFunctionArn: !Ref VideoThumbFunction
-      Cors:
-        AllowOrigins: ['*']
-        AllowMethods: [POST]
-        AllowHeaders: ['*']
+      Name: video-thumbnail-api
 
-  VideoThumbUrlPermission:
+  VideoThumbResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref VideoThumbApi
+      ParentId: !GetAtt VideoThumbApi.RootResourceId
+      PathPart: generate
+
+  VideoThumbMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref VideoThumbApi
+      ResourceId: !Ref VideoThumbResource
+      HttpMethod: POST
+      AuthorizationType: NONE
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub 'arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${VideoThumbFunction.Arn}/invocations'
+
+  VideoThumbOptionsMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref VideoThumbApi
+      ResourceId: !Ref VideoThumbResource
+      HttpMethod: OPTIONS
+      AuthorizationType: NONE
+      Integration:
+        Type: MOCK
+        RequestTemplates:
+          application/json: '{"statusCode": 200}'
+        IntegrationResponses:
+          - StatusCode: 200
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Headers: "'*'"
+              method.response.header.Access-Control-Allow-Methods: "'POST,OPTIONS'"
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+      MethodResponses:
+        - StatusCode: 200
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Headers: true
+            method.response.header.Access-Control-Allow-Methods: true
+            method.response.header.Access-Control-Allow-Origin: true
+
+  VideoThumbDeployment:
+    Type: AWS::ApiGateway::Deployment
+    DependsOn: [VideoThumbMethod, VideoThumbOptionsMethod]
+    Properties:
+      RestApiId: !Ref VideoThumbApi
+      StageName: prod
+
+  VideoThumbApiPermission:
     Type: AWS::Lambda::Permission
     Properties:
       FunctionName: !Ref VideoThumbFunction
-      Action: lambda:InvokeFunctionUrl
-      Principal: '*'
-      FunctionUrlAuthType: NONE
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub 'arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${VideoThumbApi}/*'
 
   # --- S3 invoke permission (allow any S3 bucket to trigger) ---
   S3InvokePermission:
@@ -183,6 +229,6 @@ Resources:
 
 Outputs:
   VideoThumbApiUrl:
-    Value: !GetAtt VideoThumbFunctionUrl.FunctionUrl
+    Value: !Sub 'https://${VideoThumbApi}.execute-api.${AWS::Region}.amazonaws.com/prod/generate'
   LayerBucket:
     Value: !Ref LayerBucket
