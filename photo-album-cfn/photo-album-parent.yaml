@@ -1,0 +1,57 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: S3 Photo Album - Parent Stack (infra + nested Lambda stacks)
+
+Parameters:
+  PhotoBucketName:
+    Type: String
+    Description: Comma-separated list of S3 bucket names for photos
+  AdminEmail:
+    Type: String
+    Description: Admin email (will receive temporary password)
+  CreatePhotoBucket:
+    Type: String
+    Default: 'false'
+    AllowedValues: ['true', 'false']
+  TemplateBucket:
+    Type: String
+    Description: S3 bucket holding nested stack templates
+
+Resources:
+  # --- Include main infra (same as photo-album-cfn.yaml content) ---
+  ThumbnailStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: !Sub 'https://${TemplateBucket}.s3.amazonaws.com/stacks/thumbnail-cfn.yaml'
+      Parameters:
+        PhotoBucketName: !Ref PhotoBucketName
+
+  VideoThumbnailStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: !Sub 'https://${TemplateBucket}.s3.amazonaws.com/stacks/video-thumbnail-cfn.yaml'
+      Parameters:
+        PhotoBucketName: !Ref PhotoBucketName
+
+  RotateStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: !Sub 'https://${TemplateBucket}.s3.amazonaws.com/stacks/rotate-cfn.yaml'
+      Parameters:
+        PhotoBucketName: !Ref PhotoBucketName
+
+  BurstDetectorStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: !Sub 'https://${TemplateBucket}.s3.amazonaws.com/stacks/burst-detector-cfn.yaml'
+      Parameters:
+        PhotoBucketName: !Ref PhotoBucketName
+
+Outputs:
+  ThumbnailUrl:
+    Value: !GetAtt ThumbnailStack.Outputs.ThumbnailApiUrl
+  VideoThumbnailUrl:
+    Value: !GetAtt VideoThumbnailStack.Outputs.VideoThumbApiUrl
+  RotateUrl:
+    Value: !GetAtt RotateStack.Outputs.RotateApiUrl
+  BurstDetectorUrl:
+    Value: !GetAtt BurstDetectorStack.Outputs.BurstApiUrl
