@@ -23,10 +23,19 @@ read -p "Photo S3 bucket name: " PHOTO_BUCKET
 [ -z "$PHOTO_BUCKET" ] && echo "ERROR: Required." && exit 1
 
 CREATE_BUCKET="false"
-if aws s3api head-bucket --bucket "$PHOTO_BUCKET" --region "$REGION" 2>/dev/null; then
-  echo "✓ Bucket '$PHOTO_BUCKET' exists"
-else
-  read -p "Bucket '$PHOTO_BUCKET' doesn't exist. Create it? [Y/n]: " CREATE_CONFIRM
+IFS=',' read -ra BUCKET_LIST <<< "$PHOTO_BUCKET"
+ALL_EXIST=true
+for b in "${BUCKET_LIST[@]}"; do
+  b=$(echo "$b" | xargs)  # trim whitespace
+  if aws s3api head-bucket --bucket "$b" --region "$REGION" 2>/dev/null; then
+    echo "✓ Bucket '$b' exists"
+  else
+    ALL_EXIST=false
+    echo "✗ Bucket '$b' does not exist"
+  fi
+done
+if [ "$ALL_EXIST" = false ]; then
+  read -p "Create missing bucket(s)? [Y/n]: " CREATE_CONFIRM
   [[ "${CREATE_CONFIRM:-Y}" =~ ^[Yy]$ ]] && CREATE_BUCKET="true" || { echo "Aborted."; exit 1; }
 fi
 
