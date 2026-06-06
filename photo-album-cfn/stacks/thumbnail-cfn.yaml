@@ -40,15 +40,6 @@ Resources:
           - ServerSideEncryptionByDefault:
               SSEAlgorithm: AES256
 
-  ThumbnailLayer:
-    Type: AWS::Lambda::LayerVersion
-    Properties:
-      LayerName: thumbnail-pillow
-      CompatibleRuntimes: [python3.12]
-      Content:
-        S3Bucket: !Ref ThumbnailLayerBucket
-        S3Key: thumbnail-layer.zip
-
   ThumbnailFunction:
     Type: AWS::Lambda::Function
     Properties:
@@ -58,8 +49,6 @@ Resources:
       Timeout: 300
       MemorySize: 1024
       Role: !GetAtt ThumbnailRole.Arn
-      Layers:
-        - !Ref ThumbnailLayer
       Code:
         ZipFile: |
           def handler(event, context):

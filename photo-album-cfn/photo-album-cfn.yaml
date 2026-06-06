@@ -424,28 +424,28 @@ Resources:
   RotateStack:
     Type: AWS::CloudFormation::Stack
     Properties:
-      TemplateURL: !Sub 'https://s3.${AWS::Region}.amazonaws.com/${TemplateBucket}/stacks/rotate-cfn.yaml'
+      TemplateURL: !Sub 'https://s3.${AWS::Region}.amazonaws.com/${TemplateBucket}/stacks/v2/rotate-cfn.yaml'
       Parameters:
         PhotoBucketName: !Ref PhotoBucketName
 
   ThumbnailStack:
     Type: AWS::CloudFormation::Stack
     Properties:
-      TemplateURL: !Sub 'https://s3.${AWS::Region}.amazonaws.com/${TemplateBucket}/stacks/thumbnail-cfn.yaml'
+      TemplateURL: !Sub 'https://s3.${AWS::Region}.amazonaws.com/${TemplateBucket}/stacks/v2/thumbnail-cfn.yaml'
       Parameters:
         PhotoBucketName: !Ref PhotoBucketName
 
   BurstDetectorStack:
     Type: AWS::CloudFormation::Stack
     Properties:
-      TemplateURL: !Sub 'https://s3.${AWS::Region}.amazonaws.com/${TemplateBucket}/stacks/burst-detector-cfn.yaml'
+      TemplateURL: !Sub 'https://s3.${AWS::Region}.amazonaws.com/${TemplateBucket}/stacks/v2/burst-detector-cfn.yaml'
       Parameters:
         PhotoBucketName: !Ref PhotoBucketName
 
   VideoThumbnailStack:
     Type: AWS::CloudFormation::Stack
     Properties:
-      TemplateURL: !Sub 'https://s3.${AWS::Region}.amazonaws.com/${TemplateBucket}/stacks/video-thumbnail-cfn.yaml'
+      TemplateURL: !Sub 'https://s3.${AWS::Region}.amazonaws.com/${TemplateBucket}/stacks/v2/video-thumbnail-cfn.yaml'
       Parameters:
         PhotoBucketName: !Ref PhotoBucketName
 

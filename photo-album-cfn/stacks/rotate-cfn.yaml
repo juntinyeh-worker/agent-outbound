@@ -37,15 +37,6 @@ Resources:
           - ServerSideEncryptionByDefault:
               SSEAlgorithm: AES256
 
-  RotateLayer:
-    Type: AWS::Lambda::LayerVersion
-    Properties:
-      LayerName: rotate-pillow
-      CompatibleRuntimes: [python3.12]
-      Content:
-        S3Bucket: !Ref RotateLayerBucket
-        S3Key: rotate-layer.zip
-
   RotateFunction:
     Type: AWS::Lambda::Function
     Properties:
@@ -55,8 +46,6 @@ Resources:
       Timeout: 60
       MemorySize: 512
       Role: !GetAtt RotateRole.Arn
-      Layers:
-        - !Ref RotateLayer
       Code:
         ZipFile: |
           def handler(event, context):
