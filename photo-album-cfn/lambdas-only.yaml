@@ -1,0 +1,320 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Photo Album Lambda Functions (standalone - does not modify existing infra)
+
+Parameters:
+  PhotoBucketName:
+    Type: String
+    Description: Existing photo S3 bucket name
+
+Resources:
+  # === THUMBNAIL GENERATOR ===
+  ThumbnailRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: S3Access
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: [s3:GetObject, s3:PutObject, s3:HeadObject, s3:ListBucket]
+                Resource: '*'
+
+  ThumbnailFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: thumbnail-generator
+      Runtime: python3.12
+      Handler: lambda_function.handler
+      Timeout: 300
+      MemorySize: 1024
+      Role: !GetAtt ThumbnailRole.Arn
+      Code:
+        ZipFile: |
+          def handler(event, context):
+              return {'statusCode': 200, 'body': '{}'}
+
+  ThumbnailApi:
+    Type: AWS::ApiGateway::RestApi
+    Properties:
+      Name: thumbnail-generator-api
+
+  ThumbnailResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref ThumbnailApi
+      ParentId: !GetAtt ThumbnailApi.RootResourceId
+      PathPart: generate
+
+  ThumbnailMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref ThumbnailApi
+      ResourceId: !Ref ThumbnailResource
+      HttpMethod: POST
+      AuthorizationType: NONE
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub 'arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${ThumbnailFunction.Arn}/invocations'
+
+  ThumbnailDeploy:
+    Type: AWS::ApiGateway::Deployment
+    DependsOn: ThumbnailMethod
+    Properties:
+      RestApiId: !Ref ThumbnailApi
+      StageName: prod
+
+  ThumbnailPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref ThumbnailFunction
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub 'arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${ThumbnailApi}/*'
+
+  # === ROTATE ===
+  RotateRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: S3Access
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: [s3:GetObject, s3:PutObject]
+                Resource: '*'
+
+  RotateFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: photo-rotate
+      Runtime: python3.12
+      Handler: lambda_function.handler
+      Timeout: 60
+      MemorySize: 512
+      Role: !GetAtt RotateRole.Arn
+      Code:
+        ZipFile: |
+          def handler(event, context):
+              return {'statusCode': 200, 'body': '{}'}
+
+  RotateApi:
+    Type: AWS::ApiGateway::RestApi
+    Properties:
+      Name: photo-rotate-api
+
+  RotateResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref RotateApi
+      ParentId: !GetAtt RotateApi.RootResourceId
+      PathPart: rotate
+
+  RotateMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref RotateApi
+      ResourceId: !Ref RotateResource
+      HttpMethod: POST
+      AuthorizationType: NONE
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub 'arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${RotateFunction.Arn}/invocations'
+
+  RotateDeploy:
+    Type: AWS::ApiGateway::Deployment
+    DependsOn: RotateMethod
+    Properties:
+      RestApiId: !Ref RotateApi
+      StageName: prod
+
+  RotatePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref RotateFunction
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub 'arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${RotateApi}/*'
+
+  # === BURST DETECTOR ===
+  BurstRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: S3Access
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: [s3:GetObject, s3:ListBucket]
+                Resource: '*'
+
+  BurstFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: burst-detector
+      Runtime: python3.12
+      Handler: lambda_function.handler
+      Timeout: 300
+      MemorySize: 1024
+      Role: !GetAtt BurstRole.Arn
+      Code:
+        ZipFile: |
+          def handler(event, context):
+              return {'statusCode': 200, 'body': '{}'}
+
+  BurstApi:
+    Type: AWS::ApiGateway::RestApi
+    Properties:
+      Name: burst-detector-api
+
+  BurstResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref BurstApi
+      ParentId: !GetAtt BurstApi.RootResourceId
+      PathPart: detect
+
+  BurstMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref BurstApi
+      ResourceId: !Ref BurstResource
+      HttpMethod: POST
+      AuthorizationType: NONE
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub 'arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${BurstFunction.Arn}/invocations'
+
+  BurstDeploy:
+    Type: AWS::ApiGateway::Deployment
+    DependsOn: BurstMethod
+    Properties:
+      RestApiId: !Ref BurstApi
+      StageName: prod
+
+  BurstPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref BurstFunction
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub 'arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${BurstApi}/*'
+
+  # === VIDEO THUMBNAIL ===
+  VideoThumbRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: S3Access
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: [s3:GetObject, s3:PutObject, s3:HeadObject, s3:ListBucket]
+                Resource: '*'
+
+  VideoThumbFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: video-thumbnail-generator
+      Runtime: python3.12
+      Handler: lambda_function.handler
+      Timeout: 300
+      MemorySize: 1024
+      EphemeralStorage:
+        Size: 2048
+      Role: !GetAtt VideoThumbRole.Arn
+      Code:
+        ZipFile: |
+          def handler(event, context):
+              return {'statusCode': 200, 'body': '{}'}
+
+  VideoThumbApi:
+    Type: AWS::ApiGateway::RestApi
+    Properties:
+      Name: video-thumbnail-api
+
+  VideoThumbResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref VideoThumbApi
+      ParentId: !GetAtt VideoThumbApi.RootResourceId
+      PathPart: generate
+
+  VideoThumbMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref VideoThumbApi
+      ResourceId: !Ref VideoThumbResource
+      HttpMethod: POST
+      AuthorizationType: NONE
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub 'arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${VideoThumbFunction.Arn}/invocations'
+
+  VideoThumbDeploy:
+    Type: AWS::ApiGateway::Deployment
+    DependsOn: VideoThumbMethod
+    Properties:
+      RestApiId: !Ref VideoThumbApi
+      StageName: prod
+
+  VideoThumbPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref VideoThumbFunction
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub 'arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${VideoThumbApi}/*'
+
+Outputs:
+  ThumbnailApiUrl:
+    Value: !Sub 'https://${ThumbnailApi}.execute-api.${AWS::Region}.amazonaws.com/prod/generate'
+  RotateApiUrl:
+    Value: !Sub 'https://${RotateApi}.execute-api.${AWS::Region}.amazonaws.com/prod/rotate'
+  BurstApiUrl:
+    Value: !Sub 'https://${BurstApi}.execute-api.${AWS::Region}.amazonaws.com/prod/detect'
+  VideoThumbApiUrl:
+    Value: !Sub 'https://${VideoThumbApi}.execute-api.${AWS::Region}.amazonaws.com/prod/generate'
