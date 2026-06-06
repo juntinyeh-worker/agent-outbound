@@ -1,10 +1,10 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: S3 Photo Album - CloudFront + Cognito + existing photo bucket
+Description: S3 Photo Album - Parent stack with nested Lambda stacks
 
 Parameters:
   PhotoBucketName:
     Type: String
-    Description: Comma-separated list of S3 bucket names for photos (e.g. bucket1,bucket2)
+    Description: Comma-separated list of S3 bucket names for photos
   AdminEmail:
     Type: String
     Description: Admin email (will receive temporary password)
@@ -12,7 +12,9 @@ Parameters:
     Type: String
     Default: 'false'
     AllowedValues: ['true', 'false']
-    Description: Whether to create the first photo bucket
+  TemplateBucket:
+    Type: String
+    Description: S3 bucket containing nested stack templates
 
 Conditions:
   ShouldCreateBucket: !Equals [!Ref CreatePhotoBucket, 'true']
@@ -40,6 +42,7 @@ Resources:
             AllowedMethods: [GET, PUT, DELETE, HEAD]
             AllowedHeaders: ['*']
             MaxAgeSeconds: 3600
+
   # --- Site Bucket ---
   SiteBucket:
     Type: AWS::S3::Bucket
@@ -85,7 +88,6 @@ Resources:
           ForwardedValues:
             QueryString: false
 
-  # --- Site Bucket Policy for CloudFront ---
   SiteBucketPolicy:
     Type: AWS::S3::BucketPolicy
     Properties:
@@ -125,7 +127,6 @@ Resources:
         - ALLOW_REFRESH_TOKEN_AUTH
       PreventUserExistenceErrors: ENABLED
 
-  # --- Cognito Groups ---
   ViewersGroup:
     Type: AWS::Cognito::UserPoolGroup
     Properties:
@@ -142,7 +143,6 @@ Resources:
       RoleArn: !GetAtt EditorRole.Arn
       Precedence: 1
 
-  # --- Identity Pool ---
   IdentityPool:
     Type: AWS::Cognito::IdentityPool
     Properties:
@@ -184,7 +184,6 @@ Resources:
               ForAnyValue:StringLike:
                 cognito-identity.amazonaws.com:amr: authenticated
 
-  # --- Multi-bucket IAM Policy (set via custom resource) ---
   BucketPolicyRole:
     Type: AWS::IAM::Role
     Properties:
@@ -264,7 +263,6 @@ Resources:
       EDITOR_ROLE: !Ref EditorRole
       BUCKETS: !Ref PhotoBucketName
 
-  # --- Identity Pool Role Attachment ---
   RoleAttachment:
     Type: AWS::Cognito::IdentityPoolRoleAttachment
     Properties:
@@ -277,7 +275,7 @@ Resources:
           AmbiguousRoleResolution: AuthenticatedRole
           IdentityProvider: !Sub '${UserPool.ProviderName}:${UserPoolClient}'
 
-  # --- Seed Admin User (Lambda Custom Resource) ---
+  # --- Seed Admin User ---
   SeedUserRole:
     Type: AWS::IAM::Role
     Properties:
@@ -348,7 +346,7 @@ Resources:
       EMAIL: !Ref AdminEmail
       GROUP_NAME: Editors
 
-  # --- Set CORS on existing photo bucket(s) ---
+  # --- CORS on existing bucket ---
   BucketCorsRole:
     Type: AWS::IAM::Role
     Condition: UseExistingBucket
@@ -419,6 +417,38 @@ Resources:
       ServiceToken: !GetAtt BucketCorsFunction.Arn
       BUCKETS: !Ref PhotoBucketName
 
+  # ==========================================
+  # NESTED STACKS — Lambda Functions
+  # ==========================================
+
+  RotateStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: !Sub 'https://s3.${AWS::Region}.amazonaws.com/${TemplateBucket}/stacks/rotate-cfn.yaml'
+      Parameters:
+        PhotoBucketName: !Ref PhotoBucketName
+
+  ThumbnailStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: !Sub 'https://s3.${AWS::Region}.amazonaws.com/${TemplateBucket}/stacks/thumbnail-cfn.yaml'
+      Parameters:
+        PhotoBucketName: !Ref PhotoBucketName
+
+  BurstDetectorStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: !Sub 'https://s3.${AWS::Region}.amazonaws.com/${TemplateBucket}/stacks/burst-detector-cfn.yaml'
+      Parameters:
+        PhotoBucketName: !Ref PhotoBucketName
+
+  VideoThumbnailStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: !Sub 'https://s3.${AWS::Region}.amazonaws.com/${TemplateBucket}/stacks/video-thumbnail-cfn.yaml'
+      Parameters:
+        PhotoBucketName: !Ref PhotoBucketName
+
 Outputs:
   CloudFrontURL:
     Value: !Sub 'https://${Distribution.DomainName}'
@@ -430,6 +460,13 @@ Outputs:
     Value: !Ref IdentityPool
   PhotoBucket:
     Value: !Ref PhotoBucketName
-    Description: Comma-separated list of photo buckets
   SiteBucket:
     Value: !Ref SiteBucket
+  RotateApiUrl:
+    Value: !GetAtt RotateStack.Outputs.RotateApiUrl
+  ThumbnailApiUrl:
+    Value: !GetAtt ThumbnailStack.Outputs.ThumbnailApiUrl
+  BurstApiUrl:
+    Value: !GetAtt BurstDetectorStack.Outputs.BurstApiUrl
+  VideoThumbnailApiUrl:
+    Value: !GetAtt VideoThumbnailStack.Outputs.VideoThumbApiUrl

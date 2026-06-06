@@ -1,0 +1,87 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Photo Rotate Lambda (nested stack)
+
+Parameters:
+  PhotoBucketName:
+    Type: String
+
+Resources:
+  RotateRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: S3ReadWrite
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                Resource: '*'
+
+  RotateLayerBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+
+  RotateLayer:
+    Type: AWS::Lambda::LayerVersion
+    Properties:
+      LayerName: rotate-pillow
+      CompatibleRuntimes: [python3.12]
+      Content:
+        S3Bucket: !Ref RotateLayerBucket
+        S3Key: rotate-layer.zip
+
+  RotateFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: photo-rotate
+      Runtime: python3.12
+      Handler: lambda_function.handler
+      Timeout: 60
+      MemorySize: 512
+      Role: !GetAtt RotateRole.Arn
+      Layers:
+        - !Ref RotateLayer
+      Code:
+        ZipFile: |
+          def handler(event, context):
+              return {'statusCode': 200, 'body': '{}'}
+
+  RotateFunctionUrl:
+    Type: AWS::Lambda::Url
+    Properties:
+      AuthType: NONE
+      TargetFunctionArn: !Ref RotateFunction
+      Cors:
+        AllowOrigins: ['*']
+        AllowMethods: [POST]
+        AllowHeaders: ['*']
+
+  RotateUrlPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref RotateFunction
+      Action: lambda:InvokeFunctionUrl
+      Principal: '*'
+      FunctionUrlAuthType: NONE
+
+Outputs:
+  RotateApiUrl:
+    Value: !GetAtt RotateFunctionUrl.FunctionUrl
+  RotateLayerBucket:
+    Value: !Ref RotateLayerBucket
