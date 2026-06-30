@@ -10,6 +10,7 @@ STACK_NAME="vpn-ondemand"
 REGION="${AWS_DEFAULT_REGION:-us-east-1}"
 INSTANCE_TYPE="t3.micro"
 VPN_USER="vpnuser"
+VPN_PSK=$(openssl rand -base64 24)
 VPN_PASSWORD=$(openssl rand -base64 16)
 
 # Parse args
@@ -69,50 +70,27 @@ user_data() {
 #!/bin/bash
 yum install -y strongswan
 
-# Generate self-signed cert for this server IP (required for iOS IKEv2)
-mkdir -p /etc/strongswan/ipsec.d/{cacerts,certs,private}
-
-# Generate CA key and cert
-strongswan pki --gen --type rsa --size 4096 --outform pem > /etc/strongswan/ipsec.d/private/ca-key.pem
-strongswan pki --self --ca --lifetime 3650 \
-  --in /etc/strongswan/ipsec.d/private/ca-key.pem \
-  --type rsa --dn "CN=VPN CA" \
-  --outform pem > /etc/strongswan/ipsec.d/cacerts/ca-cert.pem
-
-# Generate server key and cert
-strongswan pki --gen --type rsa --size 4096 --outform pem > /etc/strongswan/ipsec.d/private/server-key.pem
-strongswan pki --pub --in /etc/strongswan/ipsec.d/private/server-key.pem --type rsa | \
-  strongswan pki --issue --lifetime 1825 \
-    --cacert /etc/strongswan/ipsec.d/cacerts/ca-cert.pem \
-    --cakey /etc/strongswan/ipsec.d/private/ca-key.pem \
-    --dn "CN=${public_ip}" \
-    --san="${public_ip}" \
-    --flag serverAuth --flag ikeIntermediate \
-    --outform pem > /etc/strongswan/ipsec.d/certs/server-cert.pem
-
 cat > /etc/strongswan/ipsec.conf <<IPSEC
 config setup
   uniqueids=no
   charondebug="ike 2, knl 2, cfg 2"
 
-conn ikev2-eap
+conn ikev2-psk-eap
   auto=add
   type=tunnel
   keyexchange=ikev2
+  authby=secret
   left=%defaultroute
   leftid=${public_ip}
-  leftcert=server-cert.pem
-  leftsendcert=always
   leftsubnet=0.0.0.0/0
   right=%any
   rightid=%any
   rightauth=eap-mschapv2
   rightsourceip=10.10.10.0/24
   rightdns=8.8.8.8,8.8.4.4
-  rightsendcert=never
   eap_identity=%identity
-  ike=aes256-sha256-modp2048,aes256-sha384-ecp384!
-  esp=aes256-sha256,aes256-sha384!
+  ike=aes256-sha256-modp2048,aes256-sha1-modp1024!
+  esp=aes256-sha256,aes256-sha1!
   dpdaction=clear
   dpddelay=300s
   rekey=no
@@ -120,7 +98,7 @@ conn ikev2-eap
 IPSEC
 
 cat > /etc/strongswan/ipsec.secrets <<SECRETS
-: RSA server-key.pem
+: PSK "${VPN_PSK}"
 ${VPN_USER} : EAP "${VPN_PASSWORD}"
 SECRETS
 
@@ -136,9 +114,6 @@ iptables -A FORWARD -d 10.10.10.0/24 -j ACCEPT
 
 systemctl enable strongswan
 systemctl start strongswan
-
-# Export CA cert for client download
-cp /etc/strongswan/ipsec.d/cacerts/ca-cert.pem /tmp/vpn-ca.pem
 EOF
 }
 
@@ -191,26 +166,27 @@ EOJSON
   echo " VPN Server Ready!"
   echo "========================================="
   echo " Server IP:  $public_ip"
-  echo " VPN Type:   IKEv2 + EAP (iOS/Android compatible)"
+  echo " VPN Type:   IKEv2 + PSK + EAP"
+  echo " PSK:        $VPN_PSK"
   echo " Username:   $VPN_USER"
   echo " Password:   $VPN_PASSWORD"
   echo " SSH Key:    /tmp/${KEY_NAME}.pem"
   echo "========================================="
   echo ""
   echo " iPhone setup:"
-  echo "   Settings → VPN → Add VPN"
+  echo "   Settings → General → VPN → Add VPN"
   echo "   Type: IKEv2"
+  echo "   Description: AWS VPN"
   echo "   Server: $public_ip"
   echo "   Remote ID: $public_ip"
   echo "   Local ID: (leave blank)"
-  echo "   Auth: Username"
-  echo "   Username: $VPN_USER"
-  echo "   Password: $VPN_PASSWORD"
+  echo "   Auth: None"
+  echo "   Then tap 'Done', go back, tap (i) on the VPN"
+  echo "   → Authentication → Shared Secret → paste PSK"
+  echo "   → Username: $VPN_USER"
+  echo "   → Password: $VPN_PASSWORD"
   echo ""
   echo " NOTE: Wait ~2 min for server setup to complete."
-  echo " If cert validation fails, install CA cert first:"
-  echo "   scp -i /tmp/${KEY_NAME}.pem ec2-user@${public_ip}:/tmp/vpn-ca.pem ."
-  echo "   Then AirDrop/email vpn-ca.pem to your phone and install it."
   echo ""
   echo "To tear down: $0 down --region $REGION"
 }
