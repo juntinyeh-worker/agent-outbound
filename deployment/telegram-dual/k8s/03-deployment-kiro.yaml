@@ -1,0 +1,87 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: openab-kiro
+  namespace: openab
+  labels:
+    app: openab-kiro
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: openab-kiro
+  template:
+    metadata:
+      labels:
+        app: openab-kiro
+    spec:
+      containers:
+      - name: openab
+        image: ghcr.io/openabdev/openab:latest
+        ports:
+        - containerPort: 8080
+          name: webhook
+        env:
+        - name: TELEGRAM_BOT_TOKEN_KIRO
+          valueFrom:
+            secretKeyRef:
+              name: openab-secrets
+              key: telegram-bot-token-kiro
+        - name: KIRO_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: openab-secrets
+              key: kiro-api-key
+        - name: TELEGRAM_ALLOWED_USER_ID
+          valueFrom:
+            secretKeyRef:
+              name: openab-secrets
+              key: telegram-allowed-user-id
+        volumeMounts:
+        - name: config
+          mountPath: /etc/openab/config.toml
+          subPath: config-kiro.toml
+          readOnly: true
+        - name: data
+          mountPath: /data
+        resources:
+          requests:
+            cpu: 250m
+            memory: 512Mi
+          limits:
+            cpu: "1"
+            memory: 1Gi
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 10
+          periodSeconds: 30
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 5
+          periodSeconds: 10
+      volumes:
+      - name: config
+        configMap:
+          name: openab-configs
+      - name: data
+        persistentVolumeClaim:
+          claimName: openab-kiro-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: openab-kiro
+  namespace: openab
+spec:
+  selector:
+    app: openab-kiro
+  ports:
+  - port: 8080
+    targetPort: 8080
+    name: webhook
+  type: ClusterIP

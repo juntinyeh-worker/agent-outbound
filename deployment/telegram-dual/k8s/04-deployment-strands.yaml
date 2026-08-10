@@ -1,0 +1,95 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: openab-strands
+  namespace: openab
+  labels:
+    app: openab-strands
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: openab-strands
+  template:
+    metadata:
+      labels:
+        app: openab-strands
+    spec:
+      serviceAccountName: openab-strands
+      containers:
+      - name: openab
+        image: ghcr.io/openabdev/openab:beta-agentcore
+        ports:
+        - containerPort: 8080
+          name: webhook
+        env:
+        - name: TELEGRAM_BOT_TOKEN_STRANDS
+          valueFrom:
+            secretKeyRef:
+              name: openab-secrets
+              key: telegram-bot-token-strands
+        - name: TELEGRAM_ALLOWED_USER_ID
+          valueFrom:
+            secretKeyRef:
+              name: openab-secrets
+              key: telegram-allowed-user-id
+        - name: AGENTCORE_RUNTIME_ARN
+          valueFrom:
+            secretKeyRef:
+              name: openab-secrets
+              key: agentcore-runtime-arn
+        - name: AWS_REGION
+          value: "us-east-1"
+        volumeMounts:
+        - name: config
+          mountPath: /etc/openab/config.toml
+          subPath: config-strands.toml
+          readOnly: true
+        resources:
+          requests:
+            cpu: 100m
+            memory: 128Mi
+          limits:
+            cpu: 500m
+            memory: 256Mi
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 10
+          periodSeconds: 30
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 5
+          periodSeconds: 10
+      volumes:
+      - name: config
+        configMap:
+          name: openab-configs
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: openab-strands
+  namespace: openab
+spec:
+  selector:
+    app: openab-strands
+  ports:
+  - port: 8080
+    targetPort: 8080
+    name: webhook
+  type: ClusterIP
+---
+# ServiceAccount for IRSA (IAM Roles for Service Accounts)
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: openab-strands
+  namespace: openab
+  annotations:
+    # Replace with your IRSA role ARN
+    eks.amazonaws.com/role-arn: "${AGENTCORE_IAM_ROLE_ARN}"

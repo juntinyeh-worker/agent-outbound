@@ -1,0 +1,338 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  OpenAB ECS Sandbox Infrastructure.
+  Deploys ECS cluster, task roles (with cross-region sandbox-* admin),
+  ECR repository, security group, and CloudWatch log group.
+
+Parameters:
+  ResourcePrefix:
+    Type: String
+    Default: sandbox
+    Description: Prefix for all resource names
+
+  EcsRegion:
+    Type: String
+    Description: Region where ECS/ECR are deployed (this stack's region)
+
+  SandboxRegion:
+    Type: String
+    Description: Region where task role has admin access to sandbox-* resources
+
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Description: VPC for ECS tasks
+
+  SubnetIds:
+    Type: List<AWS::EC2::Subnet::Id>
+    Description: Subnets for ECS tasks (2+ AZs recommended)
+
+Resources:
+  # ============================================================================
+  # ECR Repository
+  # ============================================================================
+  ECRRepository:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: !Sub "${ResourcePrefix}-openab"
+      ImageScanningConfiguration:
+        ScanOnPush: true
+      LifecyclePolicy:
+        LifecyclePolicyText: |
+          {
+            "rules": [
+              {
+                "rulePriority": 1,
+                "description": "Keep last 10 images",
+                "selection": {
+                  "tagStatus": "any",
+                  "countType": "imageCountMoreThan",
+                  "countNumber": 10
+                },
+                "action": { "type": "expire" }
+              }
+            ]
+          }
+
+  # ============================================================================
+  # ECS Cluster
+  # ============================================================================
+  ECSCluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: !Sub "${ResourcePrefix}-openab"
+      CapacityProviders:
+        - FARGATE
+        - FARGATE_SPOT
+      DefaultCapacityProviderStrategy:
+        - CapacityProvider: FARGATE_SPOT
+          Weight: 1
+      ClusterSettings:
+        - Name: containerInsights
+          Value: enabled
+
+  # ============================================================================
+  # CloudWatch Log Group
+  # ============================================================================
+  LogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/ecs/${ResourcePrefix}-openab"
+      RetentionInDays: 14
+
+  # ============================================================================
+  # Security Group — outbound-only (webhook inbound added separately)
+  # ============================================================================
+  SecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: !Sub "${ResourcePrefix}-openab-ecs"
+      GroupDescription: "OpenAB ECS tasks - outbound only + webhook inbound"
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 8080
+          ToPort: 8080
+          CidrIp: 0.0.0.0/0
+          Description: "Telegram webhook inbound"
+      SecurityGroupEgress:
+        - IpProtocol: "-1"
+          CidrIp: 0.0.0.0/0
+          Description: "All outbound"
+      Tags:
+        - Key: Name
+          Value: !Sub "${ResourcePrefix}-openab-ecs"
+
+  # ============================================================================
+  # IAM — Task Execution Role (ECS agent: pull images, push logs, get secrets)
+  # ============================================================================
+  TaskExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${ResourcePrefix}-openab-exec-role"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+      Policies:
+        - PolicyName: !Sub "${ResourcePrefix}-secrets-access"
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - secretsmanager:GetSecretValue
+                Resource:
+                  - !Sub "arn:aws:secretsmanager:${EcsRegion}:${AWS::AccountId}:secret:${ResourcePrefix}-*"
+              - Effect: Allow
+                Action:
+                  - ssm:GetParameter
+                  - ssm:GetParameters
+                  - ssm:GetParametersByPath
+                Resource:
+                  - !Sub "arn:aws:ssm:${EcsRegion}:${AWS::AccountId}:parameter/${ResourcePrefix}/*"
+
+  # ============================================================================
+  # IAM — Task Role (what the running container can do)
+  # Dual-region: ECR in ECS_REGION + admin on sandbox-* in SANDBOX_REGION
+  # ============================================================================
+  TaskRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${ResourcePrefix}-openab-task-role"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        # --- ECR access (any region, for prototyping) ---
+        - PolicyName: !Sub "${ResourcePrefix}-ecr-access"
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: ECRAuth
+                Effect: Allow
+                Action:
+                  - ecr:GetAuthorizationToken
+                Resource: "*"
+              - Sid: ECRReadWrite
+                Effect: Allow
+                Action:
+                  - ecr:BatchCheckLayerAvailability
+                  - ecr:BatchGetImage
+                  - ecr:GetDownloadUrlForLayer
+                  - ecr:PutImage
+                  - ecr:InitiateLayerUpload
+                  - ecr:UploadLayerPart
+                  - ecr:CompleteLayerUpload
+                  - ecr:CreateRepository
+                  - ecr:DescribeRepositories
+                  - ecr:ListImages
+                  - ecr:DescribeImages
+                Resource:
+                  - !Sub "arn:aws:ecr:*:${AWS::AccountId}:repository/${ResourcePrefix}-*"
+
+        # --- Sandbox admin in SANDBOX_REGION (sandbox-* resources) ---
+        - PolicyName: !Sub "${ResourcePrefix}-sandbox-admin"
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              # S3: sandbox-* buckets
+              - Sid: S3Admin
+                Effect: Allow
+                Action: "s3:*"
+                Resource:
+                  - !Sub "arn:aws:s3:::${ResourcePrefix}-*"
+                  - !Sub "arn:aws:s3:::${ResourcePrefix}-*/*"
+              # DynamoDB: sandbox-* tables
+              - Sid: DynamoDBAdmin
+                Effect: Allow
+                Action: "dynamodb:*"
+                Resource:
+                  - !Sub "arn:aws:dynamodb:${SandboxRegion}:${AWS::AccountId}:table/${ResourcePrefix}-*"
+              # Lambda: sandbox-* functions
+              - Sid: LambdaAdmin
+                Effect: Allow
+                Action: "lambda:*"
+                Resource:
+                  - !Sub "arn:aws:lambda:${SandboxRegion}:${AWS::AccountId}:function:${ResourcePrefix}-*"
+              # API Gateway (sandbox region)
+              - Sid: APIGatewayAdmin
+                Effect: Allow
+                Action:
+                  - apigateway:GET
+                  - apigateway:POST
+                  - apigateway:PUT
+                  - apigateway:DELETE
+                  - apigateway:PATCH
+                Resource:
+                  - !Sub "arn:aws:apigateway:${SandboxRegion}::/restapis*"
+                  - !Sub "arn:aws:apigateway:${SandboxRegion}::/apis*"
+              # CloudFormation: sandbox-* stacks
+              - Sid: CloudFormationAdmin
+                Effect: Allow
+                Action: "cloudformation:*"
+                Resource:
+                  - !Sub "arn:aws:cloudformation:${SandboxRegion}:${AWS::AccountId}:stack/${ResourcePrefix}-*/*"
+              # SNS: sandbox-* topics
+              - Sid: SNSAdmin
+                Effect: Allow
+                Action: "sns:*"
+                Resource:
+                  - !Sub "arn:aws:sns:${SandboxRegion}:${AWS::AccountId}:${ResourcePrefix}-*"
+              # SQS: sandbox-* queues
+              - Sid: SQSAdmin
+                Effect: Allow
+                Action: "sqs:*"
+                Resource:
+                  - !Sub "arn:aws:sqs:${SandboxRegion}:${AWS::AccountId}:${ResourcePrefix}-*"
+              # CloudWatch Logs
+              - Sid: LogsAdmin
+                Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                  - logs:DescribeLogGroups
+                  - logs:DescribeLogStreams
+                Resource:
+                  - !Sub "arn:aws:logs:${SandboxRegion}:${AWS::AccountId}:log-group:/${ResourcePrefix}/*"
+              # SSM Parameters
+              - Sid: SSMAdmin
+                Effect: Allow
+                Action: "ssm:*"
+                Resource:
+                  - !Sub "arn:aws:ssm:${SandboxRegion}:${AWS::AccountId}:parameter/${ResourcePrefix}/*"
+              # Secrets Manager: sandbox-* secrets
+              - Sid: SecretsAdmin
+                Effect: Allow
+                Action: "secretsmanager:*"
+                Resource:
+                  - !Sub "arn:aws:secretsmanager:${SandboxRegion}:${AWS::AccountId}:secret:${ResourcePrefix}-*"
+              # IAM: sandbox-* roles (for agent prototyping)
+              - Sid: IAMSandboxRoles
+                Effect: Allow
+                Action:
+                  - iam:CreateRole
+                  - iam:DeleteRole
+                  - iam:GetRole
+                  - iam:PutRolePolicy
+                  - iam:DeleteRolePolicy
+                  - iam:AttachRolePolicy
+                  - iam:DetachRolePolicy
+                  - iam:PassRole
+                  - iam:TagRole
+                  - iam:UntagRole
+                Resource:
+                  - !Sub "arn:aws:iam::${AWS::AccountId}:role/${ResourcePrefix}-*"
+              # Bedrock (for Strands/model invocation)
+              - Sid: BedrockInvoke
+                Effect: Allow
+                Action:
+                  - bedrock:InvokeModel
+                  - bedrock:InvokeModelWithResponseStream
+                Resource: "*"
+              # Bedrock AgentCore
+              - Sid: AgentCore
+                Effect: Allow
+                Action:
+                  - bedrock-agentcore:*
+                Resource:
+                  - !Sub "arn:aws:bedrock-agentcore:${SandboxRegion}:${AWS::AccountId}:*"
+
+        # --- ECS Exec (for oabctl exec / debugging) ---
+        - PolicyName: !Sub "${ResourcePrefix}-ecs-exec"
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ssmmessages:CreateControlChannel
+                  - ssmmessages:CreateDataChannel
+                  - ssmmessages:OpenControlChannel
+                  - ssmmessages:OpenDataChannel
+                Resource: "*"
+
+Outputs:
+  ClusterArn:
+    Value: !GetAtt ECSCluster.Arn
+    Description: ECS Cluster ARN
+    Export:
+      Name: !Sub "${ResourcePrefix}-openab-cluster-arn"
+
+  ClusterName:
+    Value: !Ref ECSCluster
+    Description: ECS Cluster name
+
+  TaskExecutionRoleArn:
+    Value: !GetAtt TaskExecutionRole.Arn
+    Description: Task Execution Role ARN
+    Export:
+      Name: !Sub "${ResourcePrefix}-openab-exec-role-arn"
+
+  TaskRoleArn:
+    Value: !GetAtt TaskRole.Arn
+    Description: Task Role ARN (cross-region sandbox admin)
+    Export:
+      Name: !Sub "${ResourcePrefix}-openab-task-role-arn"
+
+  ECRRepositoryUri:
+    Value: !GetAtt ECRRepository.RepositoryUri
+    Description: ECR Repository URI
+
+  SecurityGroupId:
+    Value: !GetAtt SecurityGroup.GroupId
+    Description: Security Group ID for ECS tasks
+    Export:
+      Name: !Sub "${ResourcePrefix}-openab-sg-id"
+
+  LogGroupName:
+    Value: !Ref LogGroup
+    Description: CloudWatch Log Group

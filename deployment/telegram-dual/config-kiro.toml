@@ -1,0 +1,24 @@
+# OpenAB Configuration — Kiro Agent (Telegram)
+# This instance runs kiro-cli locally as the ACP agent.
+
+[telegram]
+bot_token = "${TELEGRAM_BOT_TOKEN_KIRO}"
+allowed_users = ["${TELEGRAM_ALLOWED_USER_ID}"]
+# allow_all_users = true  # uncomment to allow all users
+rich_messages = true
+streaming = true
+
+[agent]
+# Defaults to: kiro-cli acp --trust-all-tools
+# Uncomment to override:
+# command = "kiro-cli"
+# args = ["acp", "--trust-all-tools"]
+env = { KIRO_API_KEY = "${KIRO_API_KEY}" }
+
+[pool]
+max_sessions = 5
+session_ttl_hours = 2
+
+[reactions]
+enabled = true
+tool_display = "compact"

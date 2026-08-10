@@ -1,0 +1,22 @@
+# OpenAB Configuration — Strands Agent on AgentCore (Telegram)
+# This instance delegates to a Strands agent running in Bedrock AgentCore microVM.
+
+[telegram]
+bot_token = "${TELEGRAM_BOT_TOKEN_STRANDS}"
+allowed_users = ["${TELEGRAM_ALLOWED_USER_ID}"]
+# allow_all_users = true  # uncomment to allow all users
+rich_messages = true
+streaming = true
+
+[agentcore]
+runtime_arn = "${AGENTCORE_RUNTIME_ARN}"
+shell_command = "python3 /app/acp_wrapper.py"
+cancel_strategy = "stop"
+
+[pool]
+max_sessions = 5
+session_ttl_hours = 2
+
+[reactions]
+enabled = true
+tool_display = "compact"
