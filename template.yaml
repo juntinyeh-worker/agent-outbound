@@ -1,0 +1,342 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+  OpenAB + Kiro Telegram bot (sandbox). Unified OAB binary runs on ECS Fargate,
+  fronted by an internet-facing ALB and a CloudFront distribution that provides
+  valid TLS (via the default *.cloudfront.net certificate) for the Telegram
+  webhook. Secrets are injected from AWS Secrets Manager as env vars. A webhook
+  secret token makes the per-user allowlist non-forgeable.
+
+Parameters:
+  TelegramSecretArn:
+    Type: String
+    Description: Secrets Manager ARN holding the raw Telegram bot token (plaintext string).
+  KiroSecretArn:
+    Type: String
+    Description: Secrets Manager ARN holding the raw Kiro API key (plaintext string).
+  TelegramSecretTokenArn:
+    Type: String
+    Description: Secrets Manager ARN holding the Telegram webhook secret token.
+  ContainerImage:
+    Type: String
+    Default: ghcr.io/openabdev/openab:beta-kiro
+    Description: OAB unified image bundling openab + kiro-cli.
+  AllowedTelegramUsers:
+    Type: String
+    Default: ''
+    Description: >-
+      Comma-separated Telegram numeric user IDs allowed to chat. If empty, the
+      bot allows ALL users (AllowAllUsers=true). Prefer locking to your own ID.
+  DesiredCount:
+    Type: Number
+    Default: 1
+  TaskCpu:
+    Type: String
+    Default: '512'
+    AllowedValues: ['256', '512', '1024', '2048']
+  TaskMemory:
+    Type: String
+    Default: '1024'
+
+Conditions:
+  OpenAccess: !Equals [!Ref AllowedTelegramUsers, '']
+
+Resources:
+  # ============ NETWORKING ============
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.0.0.0/16
+      EnableDnsHostnames: true
+      EnableDnsSupport: true
+      Tags: [{ Key: Name, Value: !Sub '${AWS::StackName}-vpc' }]
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+
+  VPCGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref VPC
+      InternetGatewayId: !Ref InternetGateway
+
+  PublicSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 10.0.1.0/24
+      AvailabilityZone: !Select [0, !GetAZs '']
+      MapPublicIpOnLaunch: true
+      Tags: [{ Key: Name, Value: !Sub '${AWS::StackName}-public-1' }]
+
+  PublicSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 10.0.2.0/24
+      AvailabilityZone: !Select [1, !GetAZs '']
+      MapPublicIpOnLaunch: true
+      Tags: [{ Key: Name, Value: !Sub '${AWS::StackName}-public-2' }]
+
+  RouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+
+  PublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: VPCGatewayAttachment
+    Properties:
+      RouteTableId: !Ref RouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  Subnet1RouteAssoc:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet1
+      RouteTableId: !Ref RouteTable
+
+  Subnet2RouteAssoc:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet2
+      RouteTableId: !Ref RouteTable
+
+  # ============ SECURITY GROUPS ============
+  ALBSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: ALB ingress (HTTP from CloudFront/internet)
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+          Description: HTTP (TLS terminated at CloudFront)
+
+  ECSSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: ECS task ingress from ALB only
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 8080
+          ToPort: 8080
+          SourceSecurityGroupId: !Ref ALBSecurityGroup
+          Description: OAB webhook port from ALB
+
+  # ============ ALB ============
+  LoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Scheme: internet-facing
+      Type: application
+      Subnets: [!Ref PublicSubnet1, !Ref PublicSubnet2]
+      SecurityGroups: [!Ref ALBSecurityGroup]
+
+  TargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      VpcId: !Ref VPC
+      Port: 8080
+      Protocol: HTTP
+      TargetType: ip
+      HealthCheckPath: /health
+      HealthCheckIntervalSeconds: 30
+      HealthCheckTimeoutSeconds: 5
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 3
+      Matcher: { HttpCode: '200' }
+
+  Listener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref LoadBalancer
+      Port: 80
+      Protocol: HTTP
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref TargetGroup
+
+  # ============ CLOUDFRONT (TLS front for Telegram webhook) ============
+  Distribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        Comment: !Sub '${AWS::StackName} Telegram webhook TLS front'
+        PriceClass: PriceClass_100
+        Origins:
+          - Id: alb-origin
+            DomainName: !GetAtt LoadBalancer.DNSName
+            CustomOriginConfig:
+              OriginProtocolPolicy: http-only
+              HTTPPort: 80
+              OriginReadTimeout: 60
+        DefaultCacheBehavior:
+          TargetOriginId: alb-origin
+          ViewerProtocolPolicy: redirect-to-https
+          AllowedMethods: [GET, HEAD, OPTIONS, PUT, POST, PATCH, DELETE]
+          # Managed-CachingDisabled
+          CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad
+          # Managed-AllViewer (forwards all headers incl. X-Telegram-Bot-Api-Secret-Token, body, qs)
+          OriginRequestPolicyId: 216adef6-5c7f-47e4-b989-5492eafa07d3
+        ViewerCertificate:
+          CloudFrontDefaultCertificate: true
+
+  # ============ IAM ============
+  ExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: { Service: ecs-tasks.amazonaws.com }
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+      Policies:
+        - PolicyName: read-secrets
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: secretsmanager:GetSecretValue
+                Resource:
+                  - !Ref TelegramSecretArn
+                  - !Ref KiroSecretArn
+                  - !Ref TelegramSecretTokenArn
+
+  # Task role for the running agent. Intentionally has NO AWS permissions by
+  # default -- a Telegram-exposed agent should not get account access implicitly.
+  TaskRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: { Service: ecs-tasks.amazonaws.com }
+            Action: sts:AssumeRole
+
+  LogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/ecs/${AWS::StackName}'
+      RetentionInDays: 14
+
+  # ============ ECS ============
+  Cluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: !Sub '${AWS::StackName}-cluster'
+
+  TaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Sub '${AWS::StackName}'
+      RequiresCompatibilities: [FARGATE]
+      NetworkMode: awsvpc
+      Cpu: !Ref TaskCpu
+      Memory: !Ref TaskMemory
+      ExecutionRoleArn: !GetAtt ExecutionRole.Arn
+      TaskRoleArn: !GetAtt TaskRole.Arn
+      ContainerDefinitions:
+        - Name: openab
+          Image: !Ref ContainerImage
+          Essential: true
+          PortMappings:
+            - ContainerPort: 8080
+              Protocol: tcp
+          # The image's default CMD is `openab run -c /etc/openab/config.toml`, which
+          # requires a config file to exist. We generate one at $HOME (writable by the
+          # non-root agent user) from the ECS-injected secrets, then exec openab.
+          # OAB expands ${VAR} from env at load time, so the raw token/key/secret are
+          # never baked into the template or image -- only the numeric allowlist ID is.
+          # secret_token enforces the Telegram webhook header so the allowlist is not
+          # forgeable by direct POSTs to the public URL.
+          EntryPoint: [tini, '--']
+          Command:
+            - /bin/bash
+            - -c
+            - !If
+              - OpenAccess
+              - !Sub |
+                  set -e
+                  cat > "$HOME/config.toml" <<'CFG'
+                  [telegram]
+                  bot_token = "${!TELEGRAM_BOT_TOKEN}"
+                  secret_token = "${!TELEGRAM_SECRET_TOKEN}"
+                  allow_all_users = true
+                  rich_messages = true
+
+                  [agent]
+                  env = { KIRO_API_KEY = "${!KIRO_API_KEY}" }
+                  CFG
+                  exec openab run -c "$HOME/config.toml"
+              - !Sub |
+                  set -e
+                  cat > "$HOME/config.toml" <<'CFG'
+                  [telegram]
+                  bot_token = "${!TELEGRAM_BOT_TOKEN}"
+                  secret_token = "${!TELEGRAM_SECRET_TOKEN}"
+                  allowed_users = ["${AllowedTelegramUsers}"]
+                  rich_messages = true
+
+                  [agent]
+                  env = { KIRO_API_KEY = "${!KIRO_API_KEY}" }
+                  CFG
+                  exec openab run -c "$HOME/config.toml"
+          Environment:
+            - Name: GATEWAY_LISTEN
+              Value: 0.0.0.0:8080
+          Secrets:
+            - Name: TELEGRAM_BOT_TOKEN
+              ValueFrom: !Ref TelegramSecretArn
+            - Name: KIRO_API_KEY
+              ValueFrom: !Ref KiroSecretArn
+            - Name: TELEGRAM_SECRET_TOKEN
+              ValueFrom: !Ref TelegramSecretTokenArn
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref LogGroup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: openab
+
+  Service:
+    Type: AWS::ECS::Service
+    DependsOn: Listener
+    Properties:
+      Cluster: !Ref Cluster
+      ServiceName: !Sub '${AWS::StackName}-svc'
+      LaunchType: FARGATE
+      DesiredCount: !Ref DesiredCount
+      TaskDefinition: !Ref TaskDefinition
+      HealthCheckGracePeriodSeconds: 120
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: ENABLED
+          Subnets: [!Ref PublicSubnet1, !Ref PublicSubnet2]
+          SecurityGroups: [!Ref ECSSecurityGroup]
+      LoadBalancers:
+        - ContainerName: openab
+          ContainerPort: 8080
+          TargetGroupArn: !Ref TargetGroup
+
+Outputs:
+  CloudFrontDomain:
+    Description: CloudFront domain (valid TLS, no custom domain needed)
+    Value: !GetAtt Distribution.DomainName
+  WebhookUrl:
+    Description: Register this URL with Telegram setWebhook
+    Value: !Sub 'https://${Distribution.DomainName}/webhook/telegram'
+  AlbDnsName:
+    Value: !GetAtt LoadBalancer.DNSName
+  LogGroupName:
+    Value: !Ref LogGroup
+  AccessMode:
+    Value: !If [OpenAccess, 'OPEN - all Telegram users can chat', !Sub 'RESTRICTED to user IDs: ${AllowedTelegramUsers}']
