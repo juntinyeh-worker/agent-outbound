@@ -44,10 +44,12 @@ integrates with **Discord** and **Telegram** through [OpenAB](https://github.com
 ## What's Included
 
 ```
-strands-agent/
-├── main.py                 # Agent entry point (BedrockAgentCoreApp)
+├── main.py                 # Agent entry point (BedrockAgentCoreApp + conversation history)
+├── conversation.py         # Multi-turn history management (persistent, per-session)
 ├── tools/
 │   ├── __init__.py         # Tool exports
+│   ├── think_tool.py       # think — plan before acting
+│   ├── search_tools.py     # grep_search, find_files — navigate codebases
 │   ├── shell_tool.py       # shell_execute — run any command
 │   ├── git_tool.py         # git_operation — clone/commit/push/pull/branch
 │   ├── file_ops_tool.py    # read_file, write_file, list_directory
@@ -157,6 +159,9 @@ spec:
 
 | Tool | Description |
 |------|-------------|
+| `think` | **Plan before acting** — step-by-step reasoning for complex tasks |
+| `grep_search` | Search for patterns in code (regex, file glob filter, case control) |
+| `find_files` | Discover files by name pattern, extension, or type |
 | `shell_execute` | Run any shell command with timeout and output capture |
 | `git_operation` | Full git workflow: clone, status, add, commit, push, pull, branch, diff, log, merge, stash |
 | `read_file` | Read files (full or line range) |
@@ -164,6 +169,16 @@ spec:
 | `list_directory` | Browse directory trees with depth control |
 | `memory_store` | Persist key-value data across conversations |
 | `memory_recall` | Search memories by key, category, or text query |
+
+### Multi-Turn Conversation History
+
+The agent maintains conversation context across messages in the same session/thread.
+Each Discord thread or Telegram chat maps to a persistent session — the agent remembers
+what was discussed and can build on previous work without repeating context.
+
+- **Context window**: up to 50 turns / 100K characters (auto-trims oldest)
+- **Storage**: JSON files in the workspace (survives microVM restarts via AgentCore persistence)
+- **Per-session**: separate history per thread/chat — agents don't cross-contaminate
 
 ## Configuration
 
