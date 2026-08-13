@@ -110,8 +110,16 @@ def handle_initialize(msg_id, params):
 
 def handle_prompt(msg_id, params):
     """Handle ACP session/prompt request."""
-    prompt = params.get("prompt", "")
+    raw_prompt = params.get("prompt", "")
     session_id = params.get("sessionId", "default")
+
+    # ACP prompt can be a string or a list of content blocks
+    if isinstance(raw_prompt, list):
+        # Extract text from content blocks
+        texts = [block.get("text", "") for block in raw_prompt if block.get("type") == "text"]
+        prompt = "\n".join(texts)
+    else:
+        prompt = str(raw_prompt)
 
     if not prompt:
         send_error(msg_id, -32602, "Missing 'prompt' parameter")
@@ -126,9 +134,6 @@ def handle_prompt(msg_id, params):
         send_notification("notifications/thinking", {"content": "Processing..."})
 
         # Invoke agent with just the prompt (let Strands handle its own context)
-        # Passing messages= with history can cause issues if the format doesn't
-        # perfectly match what Bedrock expects. Simpler and more robust to just
-        # pass the prompt string directly.
         response = agent(prompt)
         result_text = response.message["content"][0]["text"]
 
