@@ -175,15 +175,26 @@ def main():
 
         if method == "initialize":
             handle_initialize(msg_id, msg.get("params", {}))
+        elif method == "session/new":
+            # OpenAB creates a new session before sending prompts
+            send_response(msg_id, {"sessionId": msg.get("params", {}).get("sessionId", "default")})
         elif method == "session/prompt":
             handle_prompt(msg_id, msg.get("params", {}))
         elif method == "session/cancel":
             handle_cancel(msg_id, msg.get("params", {}))
+        elif method == "session/end":
+            send_response(msg_id, {})
         elif method == "shutdown":
             send_response(msg_id, {})
             break
+        elif method == "notifications/initialized":
+            # Notification from client, no response needed
+            pass
         else:
-            send_error(msg_id, -32601, f"Method not found: {method}")
+            # For any unknown method, respond with empty success rather than error
+            # This prevents breaking on new ACP methods we haven't implemented
+            logger.warning(f"Unknown method: {method} — responding with empty result")
+            send_response(msg_id, {})
 
     logger.info("strands-acp adapter shutting down")
 
