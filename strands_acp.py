@@ -98,12 +98,12 @@ def send_notification(method, params):
 def handle_initialize(msg_id, params):
     """Handle ACP initialize request."""
     send_response(msg_id, {
-        "name": "strands-worker-agent",
-        "version": "1.0.0",
-        "capabilities": {
+        "agentInfo": {
+            "name": "strands-worker-agent",
+            "version": "1.0.0",
+        },
+        "agentCapabilities": {
             "streaming": False,
-            "tools": True,
-            "thinking": True,
         },
     })
 
@@ -142,10 +142,14 @@ def handle_prompt(msg_id, params):
 
         logger.info(f"Response generated ({len(result_text)} chars)")
 
-        # Send ACP response
-        send_response(msg_id, {
-            "content": [{"type": "text", "text": result_text}],
+        # Send ACP response — OpenAB expects:
+        # 1. A notification with the agent's message content
+        # 2. A final response with stopReason
+        send_notification("update", {
+            "sessionUpdate": "agent_message_chunk",
+            "content": {"type": "text", "text": result_text},
         })
+        send_response(msg_id, {"stopReason": "end_turn"})
 
     except Exception as e:
         logger.error(f"Agent error: {traceback.format_exc()}")
