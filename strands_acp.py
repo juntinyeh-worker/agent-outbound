@@ -122,18 +122,17 @@ def handle_prompt(msg_id, params):
     try:
         agent, history = get_agent()
 
-        # Load conversation history
-        messages = history.get_messages(session_id)
-        messages.append({"role": "user", "content": [{"text": prompt}]})
-
         # Send thinking notification
         send_notification("notifications/thinking", {"content": "Processing..."})
 
-        # Invoke agent
-        response = agent(messages=messages)
+        # Invoke agent with just the prompt (let Strands handle its own context)
+        # Passing messages= with history can cause issues if the format doesn't
+        # perfectly match what Bedrock expects. Simpler and more robust to just
+        # pass the prompt string directly.
+        response = agent(prompt)
         result_text = response.message["content"][0]["text"]
 
-        # Save to history
+        # Save to history for future reference
         history.add_turn(session_id, prompt, result_text)
 
         logger.info(f"Response generated ({len(result_text)} chars)")
