@@ -142,17 +142,19 @@ def handle_prompt(msg_id, params):
 
         logger.info(f"Response generated ({len(result_text)} chars)")
 
-        # Send ACP response — OpenAB expects:
-        # 1. A "session/update" notification with sessionId + update content
-        # 2. A final response with stopReason
-        send_notification("session/update", {
+        # Send ACP response
+        # Write notification and response on the same flush to avoid timing issues
+        notif = json.dumps({"jsonrpc": "2.0", "method": "session/update", "params": {
             "sessionId": session_id,
             "update": {
                 "sessionUpdate": "agent_message_chunk",
                 "content": {"type": "text", "text": result_text},
             },
-        })
-        send_response(msg_id, {"stopReason": "end_turn"})
+        }})
+        resp = json.dumps({"jsonrpc": "2.0", "id": msg_id, "result": {"stopReason": "end_turn"}})
+        # Write both lines together
+        sys.stdout.write(notif + "\n" + resp + "\n")
+        sys.stdout.flush()
 
     except Exception as e:
         logger.error(f"Agent error: {traceback.format_exc()}")
